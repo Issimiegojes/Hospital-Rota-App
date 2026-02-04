@@ -7,7 +7,15 @@ import json # Bring in functionality of saving/loading javascript object notatio
 from tkinter import *  # Bring in the Tkinter toolbox for the window (GUI).
 from tkinter import filedialog
 
-# App split into Part I: Tkinter GUI part and Part II: PuLP solve part
+# --------------------------------------------------------------------
+# App plan:
+# Part I: Tkinter GUI
+# Part II: PuLP Solve
+# --------------------------------------------------------------------
+
+# --------------------------------------------------------------------
+# Tkinter GUI
+# --------------------------------------------------------------------
 
 # Global variables: IMPORTANT!!!
 year = None
@@ -21,7 +29,8 @@ selected_manual_days = {}  # Dict to store manual days per row_num
 
 # Global variables: constant
 day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]  # Group of day names.
-# PuLP settings points
+
+# Settings for PuLP: points, hard rules; Other settings: shift making
 points_filled = 100
 points_preferred = 5
 points_spacing = -1
@@ -29,7 +38,11 @@ spacing_days_threshold = 5  # How many days apart triggers the penalty
 points_24hr = -10
 enforce_no_adj_nights = True   # Night → Night next day
 enforce_no_adj_days = True   # Day → Day next day hard rule
+include_weekday_days = False   # False = default behaviour (skip Mon-Fri day shifts when making shifts)
+
+# -------------------------------------------------------
 # The main window (like the car's dashboard).
+# -------------------------------------------------------
 
 root = Tk()  # Make the window box.
 #root.geometry("975x450")  # Set predetermined window size (width x height)
@@ -416,7 +429,7 @@ worker_canvas.bind("<Configure>", update_inner_width)  # Run this when canvas si
 worker_inner_frame.bind("<Configure>", update_scroll_region)  # Run this function when inner frame changes size
 
 def make_shifts():  # New function for making shifts list.
-    global shifts_list, holiday_days  # Use the shifts_list box outside.
+    global shifts_list, holiday_days, include_weekday_days  # Use the shifts_list box outside.
     shifts_list = []  # Empty list for shifts.
     shift_types = ["Day", "Night"]  # Group of types.
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]  # Group of day names.
@@ -429,8 +442,8 @@ def make_shifts():  # New function for making shifts list.
             tags.append("Public holiday")  # Add tag.
         for shift_type in shift_types:  # Loop Day then Night.
             # Check if this is a Monday-Friday Day shift (and not a holiday) – if both true, exclude (skip)
-            if weekday in [0, 1, 2, 3, 4] and shift_type == "Day" and day not in holiday_days:
-                continue  # Skip adding this shift – it's excluded.
+            if (not include_weekday_days) and weekday in [0, 1, 2, 3, 4] and shift_type == "Day" and day not in holiday_days:
+                continue  # Skip Mon-Fri day shifts only when the checkbox is OFF
             shift_name = f"{shift_type} {day}"  # Make name.
             shift_dict = {  # Make the shift box.
                 "name": shift_name,
@@ -789,9 +802,13 @@ def pulp_settings():
     adj_nights_var = IntVar(value=1 if enforce_no_adj_nights else 0)
     Checkbutton(popup, variable=adj_nights_var).grid(row=6, column=1)
 
+    Label(popup, text="Include Mon-Fri day shifts").grid(row=7, column=0, sticky="w")
+    include_weekday_var = IntVar(value=1 if include_weekday_days else 0)
+    Checkbutton(popup, variable=include_weekday_var).grid(row=7, column=1)
+
     def save_settings():
         global points_filled, points_preferred, points_spacing, spacing_days_threshold, points_24hr
-        global enforce_no_adj_days, enforce_no_adj_nights
+        global enforce_no_adj_days, enforce_no_adj_nights, include_weekday_days
         try:
             points_filled = int(filled_entry.get())
             points_preferred = int(preferred_entry.get())
@@ -801,13 +818,14 @@ def pulp_settings():
 
             enforce_no_adj_days   = bool(adj_days_var.get())
             enforce_no_adj_nights = bool(adj_nights_var.get())
+            include_weekday_days  = bool(include_weekday_var.get())
 
             error_label.config(text="PuLP settings updated successfully!")
             popup.destroy()
         except ValueError:
             error_label.config(text="Error: All values must be integers.")
 
-    Button(popup, text="Save Settings", command=save_settings).grid(row=7, column=0, columnspan=2)
+    Button(popup, text="Save Settings", command=save_settings).grid(row=8, column=0, columnspan=2)
 
 def save_preferences():
     if year is None:
@@ -941,13 +959,11 @@ def load_preferences():
         print(worker)
     print(selected_cannot_days)
 
-# ----------------------------------------
-#             PuLP Solve
-# ----------------------------------------
+# ----------------------------------------------------------------------------
+# PuLP Solve
+# ----------------------------------------------------------------------------
 
 def create_rota():
-    # Part 6: PuLP to assign workers to empty shifts.
-
     # First, make assignments dict from shifts_list (shift_name: worker or None).
     assignments = {}
     for shift in shifts_list:
@@ -1244,6 +1260,10 @@ def create_rota():
     # Make the text read-only (so users can't accidentally edit it)
     # But they CAN still select and copy!
     text_widget.config(state="disabled")
+
+# ---------------------------------------------------------------
+# Small code area mainly for buttons and error sign at the bottom
+# ---------------------------------------------------------------
 
 # Add worker button.
 Button(add_worker_button_frame, text="Add Worker", command=add_worker_row, width=10, pady=2).pack() 
