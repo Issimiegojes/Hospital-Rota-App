@@ -31,7 +31,7 @@ points_24hr = -10
 
 root = Tk()  # Make the window box.
 #root.geometry("975x450")  # Set predetermined window size (width x height)
-root.title("Hospital Rota App - 'Riaukapp' ")  # Name on top.
+root.title("Hospital Shift Manager - 'Riaukapp' ")  # Name on top.
 
 # Label inside frame.
 Label(root, text="Enter the year (e.g., 2026):").pack()  # Text, side=LEFT for horizontal.
@@ -1246,3 +1246,4 @@ error_label = Label(root, text="")  # For errors.
 error_label.pack()
 
 root.mainloop()  # Start the window – like "go!"
+
