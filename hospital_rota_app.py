@@ -7,7 +7,7 @@ import json # Bring in functionality of saving/loading javascript object notatio
 from tkinter import *  # Bring in the Tkinter toolbox for the window (GUI).
 from tkinter import filedialog
 
-# App split into Part I: Tkinter GUI part and Part II: Python app
+# App split into Part I: Tkinter GUI part and Part II: PuLP solve part
 
 # Global variables: IMPORTANT!!!
 year = None
@@ -21,7 +21,6 @@ selected_manual_days = {}  # Dict to store manual days per row_num
 
 # Global variables: constant
 day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]  # Group of day names.
-
 # PuLP settings points
 points_filled = 100
 points_preferred = 5
@@ -34,7 +33,7 @@ enforce_no_adj_days = True   # Day → Day next day hard rule
 
 root = Tk()  # Make the window box.
 #root.geometry("975x450")  # Set predetermined window size (width x height)
-root.title("Hospital Rota App - 'Riaukapp' ")  # Name on top.
+root.title("Hospital Shift Manager 'Riaukapp'")  # Name on top.
 
 # Label inside frame.
 Label(root, text="Enter the year (e.g., 2026):").pack()  # Text, side=LEFT for horizontal.
