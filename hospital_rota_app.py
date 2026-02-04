@@ -25,6 +25,7 @@ day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 points_filled = 100
 points_preferred = 5
 points_spacing = -1
+spacing_days_threshold = 5  # How many days apart triggers the penalty
 points_24hr = -10
 # The main window (like the car's dashboard).
 
@@ -124,6 +125,12 @@ def show_cannot_popup(row_num):
     canvas.pack(side="left", fill="both", expand=True)
     scrollbar.pack(side="right", fill="y")
 
+    def on_popup_mousewheel(event):
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    
+    popup.bind("<MouseWheel>", on_popup_mousewheel)
+    canvas.bind("<MouseWheel>", on_popup_mousewheel)
+
     Label(scrollable_frame, text="Day").grid(row=0, column=0)
     Label(scrollable_frame, text="Weekday").grid(row=0, column=1)
     Label(scrollable_frame, text="Day Shift").grid(row=0, column=2)
@@ -189,6 +196,12 @@ def show_prefer_popup(row_num):
     canvas.pack(side="left", fill="both", expand=True)
     scrollbar.pack(side="right", fill="y")
 
+    def on_popup_mousewheel(event):
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    popup.bind("<MouseWheel>", on_popup_mousewheel)
+    canvas.bind("<MouseWheel>", on_popup_mousewheel)
+
     Label(scrollable_frame, text="Day").grid(row=0, column=0)
     Label(scrollable_frame, text="Weekday").grid(row=0, column=1)
     Label(scrollable_frame, text="Day Shift").grid(row=0, column=2)
@@ -252,6 +265,12 @@ def show_manual_popup(row_num):
 
     canvas.pack(side="left", fill="both", expand=True)
     scrollbar.pack(side="right", fill="y")
+
+    def on_popup_mousewheel(event):
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    popup.bind("<MouseWheel>", on_popup_mousewheel)
+    canvas.bind("<MouseWheel>", on_popup_mousewheel)
 
     Label(scrollable_frame, text="Day").grid(row=0, column=0)
     Label(scrollable_frame, text="Weekday").grid(row=0, column=1)
@@ -742,24 +761,30 @@ def pulp_settings():
     spacing_entry.insert(0, str(points_spacing))
     spacing_entry.grid(row=2, column=1)
 
-    Label(popup, text="Points for 24-hour shifts:").grid(row=3, column=0, sticky="w")
+    Label(popup, text="Days apart for spacing penalty:").grid(row=3, column=0, sticky="w")
+    spacing_days_entry = Entry(popup)
+    spacing_days_entry.insert(0, str(spacing_days_threshold))
+    spacing_days_entry.grid(row=3, column=1)
+
+    Label(popup, text="Points for 24-hour shifts:").grid(row=4, column=0, sticky="w")
     hr24_entry = Entry(popup)
     hr24_entry.insert(0, str(points_24hr))
-    hr24_entry.grid(row=3, column=1)
+    hr24_entry.grid(row=4, column=1)
 
     def save_settings():
-        global points_filled, points_preferred, points_spacing, points_24hr
+        global points_filled, points_preferred, points_spacing, spacing_days_threshold, points_24hr
         try:
             points_filled = int(filled_entry.get())
             points_preferred = int(preferred_entry.get())
             points_spacing = int(spacing_entry.get())
+            spacing_days_threshold = int(spacing_days_entry.get())
             points_24hr = int(hr24_entry.get())
             error_label.config(text="PuLP settings updated successfully!")
             popup.destroy()
         except ValueError:
             error_label.config(text="Error: All values must be integers.")
 
-    Button(popup, text="Save Settings", command=save_settings).grid(row=4, column=0, columnspan=2)
+    Button(popup, text="Save Settings", command=save_settings).grid(row=5, column=0, columnspan=2)
 
 def save_preferences():
     if year is None:
@@ -934,7 +959,7 @@ def create_rota():
             day1 = int(shift1.split(" ")[1])
             day2 = int(shift2.split(" ")[1])
             #Add if I want 5 SHIFTS apart, not days: if j - i - 1 < 5:  # Close in SHIFTS (position j - i -1 <5).
-            if day2 - day1 < 5:  # Close.
+            if day2 - day1 < spacing_days_threshold:  # Close - using configurable threshold.
                 if shift1 in empty_shifts and shift2 in empty_shifts:  # Only if both empty.
                     bad_spacing_pairs.append((shift1, shift2))  # Add.
 
@@ -1109,55 +1134,67 @@ def create_rota():
     print("Summary:")
     print("Number of preferred shifts assigned:", preferences_count)
     print("Number of 24-hour shifts:", twenty_four_count)
-    print("Number of bad spacing pairs (<5 days apart, not shifts):", bad_spacing_count)
-
+    print(f"Number of bad spacing pairs (<{spacing_days_threshold} days apart, not shifts):", bad_spacing_count)
+    
     # Create popup to display results
     popup = Toplevel(root)
     popup.title("Rota Results")
 
-    # Create a canvas and scrollbar for scrolling
-    canvas = Canvas(popup)
-    scrollbar = Scrollbar(popup, orient="vertical", command=canvas.yview)
-    scrollable_frame = Frame(canvas)
+    # Create a Text widget instead of using Labels in a grid
+    # Text widget is like a text editor - you can select and copy from it
+    text_widget = Text(popup, wrap="none", width=60, height=30)
+    text_widget.pack(side="left", fill="both", expand=True)
 
-    scrollable_frame.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-    )
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-
-    canvas.pack(side="left", fill="both", expand=True)
+    # Create scrollbar for the Text widget
+    scrollbar = Scrollbar(popup, orient="vertical", command=text_widget.yview)
     scrollbar.pack(side="right", fill="y")
+    text_widget.config(yscrollcommand=scrollbar.set)
 
-    # Add title
-    Label(scrollable_frame, text="Final Rota:", font=("Arial", 12, "bold")).grid(row=0, column=0, columnspan=3, pady=10)
+    def on_popup_mousewheel(event):
+        text_widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    
+    popup.bind("<MouseWheel>", on_popup_mousewheel)
+    text_widget.bind("<MouseWheel>", on_popup_mousewheel)
+
+    # Now we INSERT text into the Text widget instead of creating Labels
+    # Start building the text to display
+    text_widget.insert("end", "Final Rota:\n", "title")  # "end" means add to the end
+    text_widget.insert("end", "=" * 60 + "\n\n", "separator")  # Line of equals signs
 
     # Add headers
-    Label(scrollable_frame, text="Day Number").grid(row=1, column=0)
-    Label(scrollable_frame, text="Day Shift").grid(row=1, column=1)
-    Label(scrollable_frame, text="Night Shift").grid(row=1, column=2)
+    text_widget.insert("end", f"{'Day':<7}{'Day Shift':<25}{'Night Shift':<15}\n", "header")
+    text_widget.insert("end", "-" * 60 + "\n", "separator")
 
-    # Add assignments in grid
-    row = 2
+    # Add assignments
     for day in days_list:
         day_shift = f"Day {day}"
         night_shift = f"Night {day}"
         day_worker = assignments.get(day_shift, "No shift")
         night_worker = assignments.get(night_shift, "No shift")
-        Label(scrollable_frame, text=str(day)).grid(row=row, column=0)
-        Label(scrollable_frame, text=day_worker if day_worker else "Unassigned").grid(row=row, column=1)
-        Label(scrollable_frame, text=night_worker if night_worker else "Unassigned").grid(row=row, column=2)
-        row += 1
+        
+        # Format the line nicely with spacing
+        day_text = str(day)
+        day_worker_text = day_worker if day_worker else "Unassigned"
+        night_worker_text = night_worker if night_worker else "Unassigned"
+        
+        text_widget.insert("end", f"{day_text:<5}{day_worker_text:<15}{night_worker_text:<15}\n")
 
-    # Add summary
-    Label(scrollable_frame, text="Summary:", font=("Arial", 12, "bold")).grid(row=row, column=0, columnspan=3, pady=10)
-    row += 1
-    Label(scrollable_frame, text=f"Number of preferred shifts assigned: {preferences_count}").grid(row=row, column=0, columnspan=3, sticky="w")
-    row += 1
-    Label(scrollable_frame, text=f"Number of 24-hour shifts: {twenty_four_count}").grid(row=row, column=0, columnspan=3, sticky="w")
-    row += 1
-    Label(scrollable_frame, text=f"Number of bad spacing pairs (<5 days apart, not shifts): {bad_spacing_count}").grid(row=row, column=0, columnspan=3, sticky="w")
+    # Add summary section
+    text_widget.insert("end", "\n" + "=" * 60 + "\n", "separator")
+    text_widget.insert("end", "Summary:\n", "title")
+    text_widget.insert("end", "-" * 60 + "\n", "separator")
+    text_widget.insert("end", f"Number of preferred shifts assigned: {preferences_count}\n")
+    text_widget.insert("end", f"Number of 24-hour shifts: {twenty_four_count}\n")
+    text_widget.insert("end", f"Number of bad spacing pairs (<5 days apart): {bad_spacing_count}\n")
+
+    # Make some text bold/bigger (optional styling)
+    text_widget.tag_config("title", font=("Arial", 12, "bold"))
+    text_widget.tag_config("header", font=("Arial", 10, "bold"))
+    text_widget.tag_config("separator", foreground="gray")
+
+    # Make the text read-only (so users can't accidentally edit it)
+    # But they CAN still select and copy!
+    text_widget.config(state="disabled")
 
 # Add worker button.
 Button(add_worker_button_frame, text="Add Worker", command=add_worker_row, width=10, pady=2).pack() 
