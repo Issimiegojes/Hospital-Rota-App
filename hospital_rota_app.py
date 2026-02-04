@@ -21,17 +21,20 @@ selected_manual_days = {}  # Dict to store manual days per row_num
 
 # Global variables: constant
 day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]  # Group of day names.
+
 # PuLP settings points
 points_filled = 100
 points_preferred = 5
 points_spacing = -1
 spacing_days_threshold = 5  # How many days apart triggers the penalty
 points_24hr = -10
+enforce_no_adj_nights = True   # Night → Night next day
+enforce_no_adj_days = True   # Day → Day next day hard rule
 # The main window (like the car's dashboard).
 
 root = Tk()  # Make the window box.
 #root.geometry("975x450")  # Set predetermined window size (width x height)
-root.title("Hospital Shift Manager - 'Riaukapp' ")  # Name on top.
+root.title("Hospital Rota App - 'Riaukapp' ")  # Name on top.
 
 # Label inside frame.
 Label(root, text="Enter the year (e.g., 2026):").pack()  # Text, side=LEFT for horizontal.
@@ -764,7 +767,7 @@ def pulp_settings():
     preferred_entry.insert(0, str(points_preferred))
     preferred_entry.grid(row=1, column=1)
 
-    Label(popup, text="Points for bad spacing pairs:").grid(row=2, column=0, sticky="w")
+    Label(popup, text="Points for bad spacing days:").grid(row=2, column=0, sticky="w")
     spacing_entry = Entry(popup)
     spacing_entry.insert(0, str(points_spacing))
     spacing_entry.grid(row=2, column=1)
@@ -779,20 +782,33 @@ def pulp_settings():
     hr24_entry.insert(0, str(points_24hr))
     hr24_entry.grid(row=4, column=1)
 
+    Label(popup, text="Enforce: No Day → Day").grid(row=5, column=0, sticky="w")
+    adj_days_var = IntVar(value=1 if enforce_no_adj_days else 0)
+    Checkbutton(popup, variable=adj_days_var).grid(row=5, column=1)
+
+    Label(popup, text="Enforce: No Night → Night").grid(row=6, column=0, sticky="w")
+    adj_nights_var = IntVar(value=1 if enforce_no_adj_nights else 0)
+    Checkbutton(popup, variable=adj_nights_var).grid(row=6, column=1)
+
     def save_settings():
         global points_filled, points_preferred, points_spacing, spacing_days_threshold, points_24hr
+        global enforce_no_adj_days, enforce_no_adj_nights
         try:
             points_filled = int(filled_entry.get())
             points_preferred = int(preferred_entry.get())
             points_spacing = int(spacing_entry.get())
             spacing_days_threshold = int(spacing_days_entry.get())
             points_24hr = int(hr24_entry.get())
+
+            enforce_no_adj_days   = bool(adj_days_var.get())
+            enforce_no_adj_nights = bool(adj_nights_var.get())
+
             error_label.config(text="PuLP settings updated successfully!")
             popup.destroy()
         except ValueError:
             error_label.config(text="Error: All values must be integers.")
 
-    Button(popup, text="Save Settings", command=save_settings).grid(row=5, column=0, columnspan=2)
+    Button(popup, text="Save Settings", command=save_settings).grid(row=7, column=0, columnspan=2)
 
 def save_preferences():
     if year is None:
@@ -1031,16 +1047,19 @@ def create_rota():
                 prob += assign_vars[w][night] + assign_vars[w][day] <= 1  # Can't be 2 (both).        
 
         # 4. No adjacent nights (hard rule).
-        for pair in bad_adjacent_nights_pairs:
-            current, next_shift = pair  # Unpack the pair.
-            for w in workers:
-                prob += assign_vars[w][current] + assign_vars[w][next_shift] <= 1  # Can't be 2 (both).
+        # 4. No adjacent nights (hard rule)
+        if enforce_no_adj_nights:
+            for pair in bad_adjacent_nights_pairs:
+                current, next_shift = pair
+                for w in workers:
+                    prob += assign_vars[w][current] + assign_vars[w][next_shift] <= 1
 
-        # 5. No adjacent days (hard rule).
-        for pair in bad_adjacent_days_pairs:
-            current, next_shift = pair  # Unpack the pair.
-            for w in workers:
-                prob += assign_vars[w][current] + assign_vars[w][next_shift] <= 1  # Can't be 2 (both).
+        # 5. No adjacent days (Day-to-Day) (hard rule)
+        if enforce_no_adj_days:
+            for pair in bad_adjacent_days_pairs:
+                current, next_shift = pair
+                for w in workers:
+                    prob += assign_vars[w][current] + assign_vars[w][next_shift] <= 1
 
         # 6. Cap limit for 24-hour shifts (Day X and Night X same day).
         # Use twenty_four_hour_shift_pairs – but filter for empty (PuLP can affect).
@@ -1246,4 +1265,3 @@ error_label = Label(root, text="")  # For errors.
 error_label.pack()
 
 root.mainloop()  # Start the window – like "go!"
-
