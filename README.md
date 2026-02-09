@@ -22,6 +22,13 @@ Python desktop app for scheduling 12-hour hospital shifts (day/night) with hard 
 ![Prefer-days popup](Screenshot_2.png)
 ![Rota result](Screenshot_3.png)
 
+## Development & AI Assistance
+
+This project was built with substantial help from AI coding assistants:
+- Grok (xAI)
+- Claude (Anthropic)
+- Blackbox AI (Agents: Minimax Free and Grok Code Fast 1)
+
 ## How to run
 ```bash
 pip install -r requirements.txt
