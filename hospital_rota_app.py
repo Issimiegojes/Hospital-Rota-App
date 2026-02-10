@@ -1100,33 +1100,64 @@ def load_preferences():
 # Outputs: Worker Mantas, cannot work Day/Night 2, prefers Day/Night 3.
 
 def load_xlsx_preferences(): 
+    """
+    Load worker preferences from an Excel (.xlsx) file.
+    
+    Expected format:
+    - Row 1: Headers with "Name" in column A, day numbers (1, 2, 3...) in columns B onwards
+    - Row 2+: Worker names in column A, colored cells for preferences
+    - RED cells = Cannot work that day (both Day & Night shifts)
+    - GREEN cells = Prefer to work that day (both Day & Night shifts)
+    """
     global workers_list, worker_rows, worker_row_number
     global selected_cannot_days, selected_prefer_days, selected_manual_days
 
+    # IMPORTANT: First check if days_list exists (year and month must be set)
+    try:
+        if not days_list:
+            error_label.config(text="Error: Please set year and month first!")
+            return
+    except NameError:
+        error_label.config(text="Error: Please set year and month first!")
+        return
+
+    # Open file dialog
     file_path = filedialog.askopenfilename(
         filetypes=[("Excel files", "*.xlsx *.xlsm"), ("All files", "*.*")]
     )
     if not file_path:
-        return
+        return  # User clicked Cancel
 
     try:
-        # Important: data_only=False → we can read cell colors/formatting
+        # data_only=False → keep formulas and formatting (needed to read cell colors)
+        # data_only=True would only give us the VALUES, losing all color information
         wb = openpyxl.load_workbook(file_path, data_only=False)
         
         # Try to find a suitable sheet
         sheet = None
-        for sname in wb.sheetnames: # wb.sheetnames is a list of all sheet names in the file
-            if any(x in sname.lower() for x in ["feuille", "sheet", "preferences", "rota"]): # If the sheet name (ignoring uppercase/lowercase) contains any of the words: feuille, sheet, preferences, or rota → this is probably the right sheet!
-                sheet = wb[sname]
-                break
-        if sheet is None: # Fallback: just take whatever sheet Excel considers the “active” one (the one that was open when the file was last saved). This is a safe default.
+        
+        # If only one sheet, just use it
+        if len(wb.sheetnames) == 1:
+            sheet = wb[wb.sheetnames[0]]
+        else:
+            # Try to find sheet by name (supports multiple languages)
+            for sname in wb.sheetnames:
+                sname_lower = sname.lower()
+                if any(keyword in sname_lower for keyword in 
+                       ["feuille", "sheet", "preferences", "rota", "workers", "staff"]):
+                    sheet = wb[sname]
+                    break
+        
+        # Fallback: use active sheet
+        if sheet is None:
             sheet = wb.active
 
         # Find header row and the "Name" column
-        header_row = 1
+        HEADER_ROW = 1
         name_col = None
+        
         for col in range(1, sheet.max_column + 1):
-            val = sheet.cell(row=header_row, column=col).value
+            val = sheet.cell(row=HEADER_ROW, column=col).value
             if val and str(val).strip().lower() == "name":
                 name_col = col
                 break
@@ -1135,11 +1166,32 @@ def load_xlsx_preferences():
             error_label.config(text="Error: Could not find a column with header 'Name'")
             return
 
+        # IMPROVED: Build a mapping of day numbers to column numbers
+        # This verifies that column B actually corresponds to day 1, etc.
+        day_to_col = {}  # {1: 2, 2: 3, 3: 4, ...}
+        
+        for col in range(1, sheet.max_column + 1):
+            header_val = sheet.cell(row=HEADER_ROW, column=col).value
+            if header_val is not None:
+                try:
+                    # Convert to int (handles both 1 and 1.0)
+                    day_num = int(float(header_val))
+                    # Only accept valid day numbers for this month
+                    if 1 <= day_num <= len(days_list):
+                        day_to_col[day_num] = col
+                except (ValueError, TypeError):
+                    pass  # Not a number, skip
+
+        if not day_to_col:
+            error_label.config(text="Error: Could not find day number columns (1, 2, 3...)")
+            return
+
         # Clear old data completely
-        for row_widgets in worker_rows[:]:
+        for row_widgets in worker_rows[:]:  # [:] creates a copy to avoid modification during iteration
             for key, widget in row_widgets.items():
-                if key != 'row_num' and widget.winfo_exists(): # 'row_num' does not have a widget (like entry/button), so it skips this part
-                    widget.destroy() # ← tells Tkinter: remove this button/textbox from the window, using a loop it removes all widgets
+                if key != 'row_num' and widget.winfo_exists():
+                    widget.destroy()  # Remove widget from GUI
+        
         worker_rows.clear()
         worker_row_number = 1
         workers_list.clear()
@@ -1148,50 +1200,57 @@ def load_xlsx_preferences():
         selected_manual_days.clear()
 
         loaded_count = 0
+        FIRST_DATA_ROW = 2
+        total_rows = sheet.max_row - FIRST_DATA_ROW + 1
 
-        # Loop through each worker row (starting from row 2)
-        for r in range(2, sheet.max_row + 1):
+        # Loop through each worker row
+        for row_idx, r in enumerate(range(FIRST_DATA_ROW, sheet.max_row + 1), 1):
             name_cell = sheet.cell(row=r, column=name_col)
             name_val = name_cell.value
+            
+            # Skip empty rows
             if not name_val:
                 continue
+            
             name = str(name_val).strip()
-            if not name:
+            
+            # Skip if empty after stripping, or if no letters (probably not a name)
+            if not name or not any(c.isalpha() for c in name):
                 continue
 
-            # Now scan columns B to AF (2 to 32) = days 1 to 31
+            # Collect cannot/prefer days by checking cell colors
             cannot_list = []
-            prefer_list  = []
+            prefer_list = []
 
-            for day in range(1, 32):  # days 1–31
-                col = day + 1         # B=2 → day 1, C=3 → day 2, ...
-                if col > sheet.max_column:
-                    break
-                
+            # Loop through each day that exists in this month
+            for day, col in day_to_col.items():
                 cell = sheet.cell(row=r, column=col)
                 
-                # Only check cells that actually have a solid background color
+                # Check if cell has a solid background color
                 if cell.fill and cell.fill.fill_type == 'solid':
                     color = cell.fill.start_color.rgb
                     
-                    if color:
-                        # Remove alpha channel if present → keep only RRGGBB part
-                        color_hex = color.upper()[-6:]   # last 6 chars = RRGGBB
-                        
-                        # Red (common variations)
-                        if color_hex in ['FF0000', 'FF0100', 'FE0000']:  # allow tiny variations
-                            cannot_list.append(f"Day {day}")
-                            cannot_list.append(f"Night {day}")
-                        
-                        # Green (common variations)
-                        elif color_hex in ['00FF00', '00FF01', '01FF00', '00FE00']:
-                            prefer_list.append(f"Day {day}")
-                            prefer_list.append(f"Night {day}")              
+                    # CRITICAL FIX: Check if color is None
+                    if color is None:
+                        continue
+                    
+                    # Remove alpha channel if present → keep only RRGGBB part
+                    color_hex = color.upper()[-6:]  # Last 6 chars = RRGGBB
+                    
+                    # Check if red (cannot work)
+                    if is_red_color(color_hex):
+                        cannot_list.append(f"Day {day}")
+                        cannot_list.append(f"Night {day}")
+                    
+                    # Check if green (prefer to work)
+                    elif is_green_color(color_hex):
+                        prefer_list.append(f"Day {day}")
+                        prefer_list.append(f"Night {day}")
 
-            # Create the worker dictionary (with defaults)
+            # Create the worker dictionary with default values
             worker_dict = {
                 "name": name,
-                "shifts_to_fill": [0, 100],
+                "shifts_to_fill": [0, 100],  # Default: 0 min, 100 max
                 "cannot_work": cannot_list,
                 "prefers": prefer_list,
                 "max_weekends": 100,
@@ -1200,51 +1259,111 @@ def load_xlsx_preferences():
             }
             workers_list.append(worker_dict)
 
-            # Add the row to the GUI
+            # IMPORTANT: Save current row number BEFORE calling add_worker_row
             current_row_num = worker_row_number
-            add_worker_row()  # this creates name entry, range entry, buttons, etc.
+            
+            # Create GUI row (this will increment worker_row_number internally)
+            add_worker_row()
+            
+            # CRITICAL FIX: Do NOT increment worker_row_number here!
+            # add_worker_row() already does it, so incrementing again causes double-increment bug
+            # REMOVED: worker_row_number += 1
 
-            # Fill in the values we read
+            # Fill in the values in the GUI
             for row_widgets in worker_rows:
                 if row_widgets['row_num'] == current_row_num:
+                    # Fill name
                     row_widgets['name_entry'].delete(0, END)
                     row_widgets['name_entry'].insert(0, name)
                     
+                    # Fill shift range (default 0-100)
                     row_widgets['range_entry'].delete(0, END)
-                    row_widgets['range_entry'].insert(0, "0-100")  # you can change default later
+                    row_widgets['range_entry'].insert(0, "0-100")
                     
+                    # Fill max weekends
                     row_widgets['max_weekends_entry'].delete(0, END)
                     row_widgets['max_weekends_entry'].insert(0, "100")
                     
+                    # Fill max 24hr
                     row_widgets['max_24hr_entry'].delete(0, END)
                     row_widgets['max_24hr_entry'].insert(0, "100")
 
-                    # Update button labels to show how many days are set
-                    num_c = len(cannot_list)
-                    num_p = len(prefer_list)
+                    # Update button labels to show selection counts
+                    num_cannot = len(cannot_list)
+                    num_prefer = len(prefer_list)
                     
                     row_widgets['cannot_button'].config(
-                        text=f"Select ({num_c})" if num_c > 0 else "Select"
+                        text=f"Select ({num_cannot})" if num_cannot > 0 else "Select"
                     )
                     row_widgets['prefer_button'].config(
-                        text=f"Select ({num_p})" if num_p > 0 else "Select"
+                        text=f"Select ({num_prefer})" if num_prefer > 0 else "Select"
                     )
                     row_widgets['manual_button'].config(text="Select")
                     break
 
-            # Store selections so popups show correct checkboxes ticked
+            # Store selections for the popup windows
             selected_cannot_days[current_row_num] = cannot_list
             selected_prefer_days[current_row_num] = prefer_list
             selected_manual_days[current_row_num] = []
 
             loaded_count += 1
-            worker_row_number += 1   # Very important – increment for next worker
+            
+            # Show progress every 5 workers (helps with large files)
+            if loaded_count % 5 == 0 or row_idx == total_rows:
+                error_label.config(text=f"Loading... {loaded_count} worker(s)")
+                root.update()  # Force GUI to refresh
 
-        error_label.config(text=f"Loaded {loaded_count} worker(s) — red = cannot, green = prefer")
+        # Final success message
+        error_label.config(text=f"✓ Loaded {loaded_count} worker(s) — red = cannot, green = prefer")
 
     except Exception as e:
         error_label.config(text=f"Error reading file: {str(e)}")
-        print("Detailed error:", e)  # print to console helps debugging
+        print("Detailed error:", e)  # Print to console for debugging
+
+
+# Helper functions for color detection
+def is_red_color(color_hex):
+    """
+    Check if a color hex code (RRGGBB) represents red.
+    Returns True for pure red and close variations.
+    
+    Args:
+        color_hex: 6-character hex string like "FF0000"
+    
+    Returns:
+        bool: True if the color is red-ish
+    """
+    try:
+        r = int(color_hex[0:2], 16)  # Red channel (0-255)
+        g = int(color_hex[2:4], 16)  # Green channel (0-255)
+        b = int(color_hex[4:6], 16)  # Blue channel (0-255)
+        
+        # Red if: red channel high (≥250) and green/blue low (≤5)
+        return r >= 250 and g <= 5 and b <= 5
+    except (ValueError, IndexError):
+        return False
+
+
+def is_green_color(color_hex):
+    """
+    Check if a color hex code (RRGGBB) represents green.
+    Returns True for pure green and close variations.
+    
+    Args:
+        color_hex: 6-character hex string like "00FF00"
+    
+    Returns:
+        bool: True if the color is green-ish
+    """
+    try:
+        r = int(color_hex[0:2], 16)  # Red channel (0-255)
+        g = int(color_hex[2:4], 16)  # Green channel (0-255)
+        b = int(color_hex[4:6], 16)  # Blue channel (0-255)
+        
+        # Green if: green channel high (≥250) and red/blue low (≤5)
+        return r <= 5 and g >= 250 and b <= 5
+    except (ValueError, IndexError):
+        return False
 
 # ----------------------------------------------------------------------------
 # PuLP Solve
