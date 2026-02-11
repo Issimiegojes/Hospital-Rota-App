@@ -7,6 +7,8 @@ import json # Bring in functionality of saving/loading javascript object notatio
 from tkinter import *  # Bring in the Tkinter toolbox for the window (GUI).
 from tkinter import filedialog
 import openpyxl # Allows to use .xlsx files
+from selection_popups import prefer_count, cannot_count, manual_count
+from solver import solve_rota
 
 # --------------------------------------------------------------------
 # App plan:
@@ -121,349 +123,70 @@ Button(month_frame, text="Save", command=save_month).pack(side=LEFT)  # Button, 
 current_month_label = Label(month_frame, text="Current Month: None")
 current_month_label.pack(side=LEFT)
 
-def show_cannot_popup(row_num):
-    global selected_cannot_days
-    popup = Toplevel(root)
-    popup.title("Select Days Cannot Work")
+# =======================================
+# Popup functions, found in separate file
+# =======================================
 
-    # Create a canvas and scrollbar for scrolling
-    canvas = Canvas(popup)
-    scrollbar = Scrollbar(popup, orient="vertical", command=canvas.yview)
-    scrollable_frame = Frame(canvas)
-
-    scrollable_frame.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-    )
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    def on_popup_mousewheel(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-    
-    popup.bind("<MouseWheel>", on_popup_mousewheel)
-    canvas.bind("<MouseWheel>", on_popup_mousewheel)
-
-    Label(scrollable_frame, text="Day").grid(row=0, column=0)
-    Label(scrollable_frame, text="Weekday").grid(row=0, column=1)
-    Label(scrollable_frame, text="Day Shift").grid(row=0, column=2)
-    Label(scrollable_frame, text="Night Shift").grid(row=0, column=3)
-    
-    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    check_vars = []
-    
-    # Create separate lists to hold ONLY day shift variables and ONLY night shift variables
-    day_shift_vars = []  # Empty basket for day shift checkboxes
-    night_shift_vars = []  # Empty basket for night shift checkboxes
-    
-    for i, day in enumerate(days_list, start=1):
-        weekday = (starting_weekday + (day - 1)) % 7
-        day_name = day_names[weekday]
-        Label(scrollable_frame, text=str(day)).grid(row=i, column=0)
-        Label(scrollable_frame, text=day_name).grid(row=i, column=1)
-        
-        # Day shift checkbox
-        day_var = IntVar()
-        Checkbutton(scrollable_frame, variable=day_var).grid(row=i, column=2)
-        check_vars.append((f"Day {day}", day_var))
-        day_shift_vars.append(day_var)  # Add to day shift list
-        
-        # Night shift checkbox
-        night_var = IntVar()
-        Checkbutton(scrollable_frame, variable=night_var).grid(row=i, column=3)
-        check_vars.append((f"Night {day}", night_var))
-        night_shift_vars.append(night_var)  # Add to night shift list
-
-    # Pre-select checkboxes based on existing selections for this row_num
-    existing_selections = selected_cannot_days.get(row_num, [])
-    for shift_name, var in check_vars:
-        if shift_name in existing_selections:
-            var.set(1)
-
-    # Calculate the row number for "Check All" row
-    # It should be after all the days, so: len(days_list) + 1
-    check_all_row = len(days_list) + 1
-    
-    # Create the "Check All" label in column 1
-    Label(scrollable_frame, text="Check All").grid(row=check_all_row, column=1, sticky="w")
-    
-    # Create master checkbox variables for day and night
-    master_day_var = IntVar()  # Variable for "Check All Day Shifts"
-    master_night_var = IntVar()  # Variable for "Check All Night Shifts"
-    
-    # Function that runs when "Check All Day Shifts" is clicked
-    def toggle_all_day_shifts():
-        # Get the value: 1 if checked, 0 if unchecked
-        value = master_day_var.get()
-        # Loop through ALL day shift checkboxes and set them to the same value
-        for day_var in day_shift_vars:
-            day_var.set(value)  # Set each one to 1 (checked) or 0 (unchecked)
-    
-    # Function that runs when "Check All Night Shifts" is clicked
-    def toggle_all_night_shifts():
-        # Get the value: 1 if checked, 0 if unchecked
-        value = master_night_var.get()
-        # Loop through ALL night shift checkboxes and set them to the same value
-        for night_var in night_shift_vars:
-            night_var.set(value)  # Set each one to 1 (checked) or 0 (unchecked)
-    
-    # Create the "Check All" checkboxes with the command parameter
-    # command= tells the checkbox what function to run when clicked
-    Checkbutton(scrollable_frame, variable=master_day_var, 
-                command=toggle_all_day_shifts).grid(row=check_all_row, column=2)
-    Checkbutton(scrollable_frame, variable=master_night_var, 
-                command=toggle_all_night_shifts).grid(row=check_all_row, column=3)
-
-    def save_selection():
-        global selected_cannot_days
-        selected_shifts = [shift for shift, var in check_vars if var.get() == 1]
-        selected_cannot_days[row_num] = selected_shifts
-        # Update button text
-        for row_widgets in worker_rows:
-            if row_widgets['row_num'] == row_num:
-                num = len(selected_shifts)
-                row_widgets['cannot_button'].config(text=f"Select ({num})" if num > 0 else "Select")
-                break
-        if selected_shifts:
-            error_label.config(text=f"Worker cannot work on these shifts: {', '.join(selected_shifts)}")
-        else:
-            error_label.config(text="")
-        popup.destroy()
-
-    # Update the "Save Selection" button row to be AFTER the "Check All" row
-    Button(scrollable_frame, text="Save Selection", 
-           command=save_selection).grid(row=check_all_row + 1, column=0, columnspan=4)
-    
 def show_prefer_popup(row_num):
-    global selected_prefer_days
-    popup = Toplevel(root)
-    popup.title("Select Days Prefer Work")
+    """
+    Opens a popup window where the user can choose which shifts this worker
+    would LIKE to work (preferred days/shifts).
 
-    # Create a canvas and scrollbar for scrolling
-    canvas = Canvas(popup)
-    scrollbar = Scrollbar(popup, orient="vertical", command=canvas.yview)
-    scrollable_frame = Frame(canvas)
+    What it does, step by step:
+    1. Creates a new small window with title "Select Days Prefer Work"
+    2. Lists every day of the month + checkboxes for Day and Night shifts
+    3. Pre-ticks boxes that were already selected before (if the user opened it again)
+    4. Includes "Check All Day" and "Check All Night" boxes for fast selection
+    5. When user clicks "Save Selection":
+       - Saves chosen preferred shifts into selected_prefer_days[row_num]
+       - Changes button text to show how many were selected (e.g. "Select (4)")
+       - Shows message like "Worker prefers to work on these shifts: ..."
+       - Closes the popup
 
-    scrollable_frame.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-    )
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
+    - Similar function for the other popups
+    """
 
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
+    prefer_popup_inputs = {
+        "give_root": root,
+        "give_days_list": days_list,
+        "give_starting_weekday": starting_weekday,
+        "give_worker_rows": worker_rows,
+        "give_row_num": row_num,
+        "give_selected_prefer_days": selected_prefer_days,   
+        "give_error_label": error_label,                     
+    }
 
-    def on_popup_mousewheel(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    prefer_count(prefer_popup_inputs)
 
-    popup.bind("<MouseWheel>", on_popup_mousewheel)
-    canvas.bind("<MouseWheel>", on_popup_mousewheel)
 
-    Label(scrollable_frame, text="Day").grid(row=0, column=0)
-    Label(scrollable_frame, text="Weekday").grid(row=0, column=1)
-    Label(scrollable_frame, text="Day Shift").grid(row=0, column=2)
-    Label(scrollable_frame, text="Night Shift").grid(row=0, column=3)
+def show_cannot_popup(row_num):
 
-    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    check_vars = []
+    cannot_popup_inputs = {
+        "give_root": root,
+        "give_days_list": days_list,
+        "give_starting_weekday": starting_weekday,
+        "give_worker_rows": worker_rows,
+        "give_row_num": row_num,
+        "give_selected_cannot_days": selected_cannot_days,   
+        "give_error_label": error_label,                     
+    }
 
-    # Create separate lists to hold ONLY day shift variables and ONLY night shift variables
-    day_shift_vars = []  # Empty basket for day shift checkboxes
-    night_shift_vars = []  # Empty basket for night shift checkboxes
-
-    for i, day in enumerate(days_list, start=1):
-        weekday = (starting_weekday + (day - 1)) % 7
-        day_name = day_names[weekday]
-        Label(scrollable_frame, text=str(day)).grid(row=i, column=0)
-        Label(scrollable_frame, text=day_name).grid(row=i, column=1)
-        
-        # Day shift checkbox
-        day_var = IntVar()
-        Checkbutton(scrollable_frame, variable=day_var).grid(row=i, column=2)
-        check_vars.append((f"Day {day}", day_var))
-        day_shift_vars.append(day_var)  # Add to day shift list
-        
-        # Night shift checkbox
-        night_var = IntVar()
-        Checkbutton(scrollable_frame, variable=night_var).grid(row=i, column=3)
-        check_vars.append((f"Night {day}", night_var))
-        night_shift_vars.append(night_var)  # Add to night shift list
-
-    # Pre-select checkboxes based on existing selections for this row_num
-    existing_selections = selected_prefer_days.get(row_num, [])
-    for shift_name, var in check_vars:
-        if shift_name in existing_selections:
-            var.set(1)
-
-    # Calculate the row number for "Check All" row
-    # It should be after all the days, so: len(days_list) + 1
-    check_all_row = len(days_list) + 1
-    
-    # Create the "Check All" label in column 1
-    Label(scrollable_frame, text="Check All").grid(row=check_all_row, column=1, sticky="w")
-    
-    # Create master checkbox variables for day and night
-    master_day_var = IntVar()  # Variable for "Check All Day Shifts"
-    master_night_var = IntVar()  # Variable for "Check All Night Shifts"
-    
-    # Function that runs when "Check All Day Shifts" is clicked
-    def toggle_all_day_shifts():
-        # Get the value: 1 if checked, 0 if unchecked
-        value = master_day_var.get()
-        # Loop through ALL day shift checkboxes and set them to the same value
-        for day_var in day_shift_vars:
-            day_var.set(value)  # Set each one to 1 (checked) or 0 (unchecked)
-    
-    # Function that runs when "Check All Night Shifts" is clicked
-    def toggle_all_night_shifts():
-        # Get the value: 1 if checked, 0 if unchecked
-        value = master_night_var.get()
-        # Loop through ALL night shift checkboxes and set them to the same value
-        for night_var in night_shift_vars:
-            night_var.set(value)  # Set each one to 1 (checked) or 0 (unchecked)
-    
-    # Create the "Check All" checkboxes with the command parameter
-    # command= tells the checkbox what function to run when clicked
-    Checkbutton(scrollable_frame, variable=master_day_var, 
-                command=toggle_all_day_shifts).grid(row=check_all_row, column=2)
-    Checkbutton(scrollable_frame, variable=master_night_var, 
-                command=toggle_all_night_shifts).grid(row=check_all_row, column=3)
-
-    def save_selection():
-        global selected_prefer_days
-        selected_shifts = [shift for shift, var in check_vars if var.get() == 1]
-        selected_prefer_days[row_num] = selected_shifts
-        # Update button text
-        for row_widgets in worker_rows:
-            if row_widgets['row_num'] == row_num:
-                num = len(selected_shifts)
-                row_widgets['prefer_button'].config(text=f"Select ({num})" if num > 0 else "Select")
-                break
-        if selected_shifts:
-            error_label.config(text=f"Worker prefers to work on these shifts: {', '.join(selected_shifts)}")
-        else:
-            error_label.config(text="")
-        popup.destroy()
-
-    Button(scrollable_frame, text="Save Selection", command=save_selection).grid(row=check_all_row + 1, column=0, columnspan=4)
+    cannot_count(cannot_popup_inputs)
 
 def show_manual_popup(row_num):
-    global selected_manual_days
-    popup = Toplevel(root)
-    popup.title("Select Manual Shifts")
 
-    # Create a canvas and scrollbar for scrolling
-    canvas = Canvas(popup)
-    scrollbar = Scrollbar(popup, orient="vertical", command=canvas.yview)
-    scrollable_frame = Frame(canvas)
-
-    scrollable_frame.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-    )
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    def on_popup_mousewheel(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-    popup.bind("<MouseWheel>", on_popup_mousewheel)
-    canvas.bind("<MouseWheel>", on_popup_mousewheel)
-
-    Label(scrollable_frame, text="Day").grid(row=0, column=0)
-    Label(scrollable_frame, text="Weekday").grid(row=0, column=1)
-    Label(scrollable_frame, text="Day Shift").grid(row=0, column=2)
-    Label(scrollable_frame, text="Night Shift").grid(row=0, column=3)
-
-    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    check_vars = []
-
-    # Create separate lists to hold ONLY day shift variables and ONLY night shift variables
-    day_shift_vars = []  # Empty basket for day shift checkboxes
-    night_shift_vars = []  # Empty basket for night shift checkboxes
-
-    for i, day in enumerate(days_list, start=1):
-        weekday = (starting_weekday + (day - 1)) % 7
-        day_name = day_names[weekday]
-        Label(scrollable_frame, text=str(day)).grid(row=i, column=0)
-        Label(scrollable_frame, text=day_name).grid(row=i, column=1)
-        
-        # Day shift checkbox
-        day_var = IntVar()
-        Checkbutton(scrollable_frame, variable=day_var).grid(row=i, column=2)
-        check_vars.append((f"Day {day}", day_var))
-        day_shift_vars.append(day_var)  # Add to day shift list
-        
-        # Night shift checkbox
-        night_var = IntVar()
-        Checkbutton(scrollable_frame, variable=night_var).grid(row=i, column=3)
-        check_vars.append((f"Night {day}", night_var))
-        night_shift_vars.append(night_var)  # Add to night shift list
-
-    # Pre-select checkboxes based on existing selections for this row_num
-    existing_selections = selected_manual_days.get(row_num, [])
-    for shift_name, var in check_vars:
-        if shift_name in existing_selections:
-            var.set(1)
-
-    # Calculate the row number for "Check All" row
-    # It should be after all the days, so: len(days_list) + 1
-    check_all_row = len(days_list) + 1
+    manual_popup_inputs = {
+        "give_root": root,
+        "give_days_list": days_list,
+        "give_starting_weekday": starting_weekday,
+        "give_worker_rows": worker_rows,
+        "give_row_num": row_num,
+        "give_selected_manual_days": selected_manual_days,   
+        "give_error_label": error_label,    
+    }
     
-    # Create the "Check All" label in column 1
-    Label(scrollable_frame, text="Check All").grid(row=check_all_row, column=1, sticky="w")
-    
-    # Create master checkbox variables for day and night
-    master_day_var = IntVar()  # Variable for "Check All Day Shifts"
-    master_night_var = IntVar()  # Variable for "Check All Night Shifts"
-    
-    # Function that runs when "Check All Day Shifts" is clicked
-    def toggle_all_day_shifts():
-        # Get the value: 1 if checked, 0 if unchecked
-        value = master_day_var.get()
-        # Loop through ALL day shift checkboxes and set them to the same value
-        for day_var in day_shift_vars:
-            day_var.set(value)  # Set each one to 1 (checked) or 0 (unchecked)
-    
-    # Function that runs when "Check All Night Shifts" is clicked
-    def toggle_all_night_shifts():
-        # Get the value: 1 if checked, 0 if unchecked
-        value = master_night_var.get()
-        # Loop through ALL night shift checkboxes and set them to the same value
-        for night_var in night_shift_vars:
-            night_var.set(value)  # Set each one to 1 (checked) or 0 (unchecked)
-    
-    # Create the "Check All" checkboxes with the command parameter
-    # command= tells the checkbox what function to run when clicked
-    Checkbutton(scrollable_frame, variable=master_day_var, 
-                command=toggle_all_day_shifts).grid(row=check_all_row, column=2)
-    Checkbutton(scrollable_frame, variable=master_night_var, 
-                command=toggle_all_night_shifts).grid(row=check_all_row, column=3)
+    manual_count(manual_popup_inputs)
 
-    def save_selection():
-        global selected_manual_days
-        selected_shifts = [shift for shift, var in check_vars if var.get() == 1]
-        selected_manual_days[row_num] = selected_shifts
-        # Update button text
-        for row_widgets in worker_rows:
-            if row_widgets['row_num'] == row_num:
-                num = len(selected_shifts)
-                row_widgets['manual_button'].config(text=f"Select ({num})" if num > 0 else "Select")
-                break
-        if selected_shifts:
-            error_label.config(text=f"Worker manually assigned to these shifts: {', '.join(selected_shifts)}")
-        else:
-            error_label.config(text="")
-        popup.destroy()
-
-    Button(scrollable_frame, text="Save Selection", command=save_selection).grid(row=check_all_row + 1, column=0, columnspan=4)
 
 Label(root, text="Enter public holiday days, separated by comma (e.g., 24,25,26) or leave blank:").pack()  # Text label.
 
@@ -1093,12 +816,6 @@ def load_preferences():
         print(worker)
     print(selected_cannot_days)
 
-# Load .xlsx function
-# Accepts this order:
-# A1: Name, B1: 1, C1: 2, D1: 3 ... AF132: 31
-# A2: Mantas, B2: "clear", C2: red fill, D2: green fill...
-# Outputs: Worker Mantas, cannot work Day/Night 2, prefers Day/Night 3.
-
 def load_xlsx_preferences(): 
     """
     Load worker preferences from an Excel (.xlsx) file.
@@ -1366,305 +1083,128 @@ def is_green_color(color_hex):
         return False
 
 # ----------------------------------------------------------------------------
-# PuLP Solve
+# PuLP Solve: solver is in separate file
 # ----------------------------------------------------------------------------
 
 def create_rota():
-    # First, make assignments dict from shifts_list (shift_name: worker or None).
-    assignments = {}
-    for shift in shifts_list:
-        assignments[shift["name"]] = shift["assigned_worker"]
-
-    # Get empty shifts and empty weekend shifts (None).
-    empty_shifts = [name for name in assignments if assignments[name] is None]
-    empty_weekend_shifts = []  # Empty list to hold weekend empty names.
-    for shift in shifts_list:  # Loop all shifts.
-        if shift["name"] in empty_shifts and "Weekend" in shift["tags"]:  # If empty and weekend tag.
-            empty_weekend_shifts.append(shift["name"])  # Add name.
-
-    # Get worker names.
-    workers = [w["name"] for w in workers_list]
-
-    # Pre-find bad pairs for these rules: bad night to day, bad adjacent nights, bad adjacent days, 24-hour shifts
-    bad_night_to_day_pairs = []  # For Night then Day +1.
-    bad_adjacent_nights_pairs = []  # For Night then Night +1.
-    bad_adjacent_days_pairs = []  # For Day then Day +1.
-    twenty_four_hour_shift_pairs = [] # For 24-hour shifts: Day 1 + Night 1
-
-    sorted_shift_names = sorted(empty_shifts, key=lambda s: int(s.split(" ")[1]))  # Sort empty shifts by day.
-    for i in range(len(sorted_shift_names)):  # Outer loop.
-        for j in range(i+1, len(sorted_shift_names)):  # Inner for pairs after i.
-            current = sorted_shift_names[i]
-            next_shift = sorted_shift_names[j]
-            current_day = int(current.split(" ")[1])
-            next_day = int(next_shift.split(" ")[1])
-            if next_day == current_day + 1:  # Only if consecutive days – common for all.
-                if "Night" in current and "Day" in next_shift:
-                    bad_night_to_day_pairs.append((current, next_shift))
-                if "Night" in current and "Night" in next_shift:
-                    bad_adjacent_nights_pairs.append((current, next_shift))
-                if "Day" in current and "Day" in next_shift:
-                    bad_adjacent_days_pairs.append((current, next_shift))
-            if next_day == current_day:
-                twenty_four_hour_shift_pairs.append((current, next_shift))
-            
-    # Spacing <5 days apart. Check all shift pairs (full rota). If a pair is <5 days apart, add it to the bad list, but only if a shift is empty.
-    all_shift_names = sorted([shift["name"] for shift in shifts_list], key=lambda s: int(s.split(" ")[1]))
-    bad_spacing_pairs = []  # Empty list.
-    for i in range(len(all_shift_names)):  # Outer loop.
-        for j in range(i+1, len(all_shift_names)):  # Inner.
-            shift1 = all_shift_names[i]  # First.
-            shift2 = all_shift_names[j]  # Second.
-            day1 = int(shift1.split(" ")[1])
-            day2 = int(shift2.split(" ")[1])
-            #Add if I want 5 SHIFTS apart, not days: if j - i - 1 < 5:  # Close in SHIFTS (position j - i -1 <5).
-            if day2 - day1 < spacing_days_threshold:  # Close - using configurable threshold.
-                if shift1 in empty_shifts and shift2 in empty_shifts:  # Only if both empty.
-                    bad_spacing_pairs.append((shift1, shift2))  # Add.
-
-    worker_prefers = {w["name"]: w["prefers"] for w in workers_list}
-    max_24hr = {w["name"]: w["max_24hr"] for w in workers_list}  # { "Mantas": 2, "Tadas": 3 } – short way to make from list.
-    max_weekends = {w["name"]: w["max_weekends"] for w in workers_list}
-    worker_cannot = {w["name"]: w["cannot_work"] for w in workers_list}  # Box with worker: their "NO" list.
-
-    # If no empty shifts or no workers, skip.
-    if not empty_shifts or not workers:
-        print("No empty shifts or no workers – nothing to assign.")
-        error_label.config(text="No empty shifts or no workers – nothing to assign.")
-    else:
-        # Make the PuLP problem.
-        prob = pulp.LpProblem("Rota_Assignment", pulp.LpMaximize)  # Maximize points.
-
-        # Variables: Yes/no for worker on shift.
-        assign_vars = pulp.LpVariable.dicts("Assign", (workers, empty_shifts), 0, 1, pulp.LpBinary)  # 0 or 1 (no/yes).
-        # Define a binary var for if w does 24-hour on that day.
-        twenty_four_vars = pulp.LpVariable.dicts("24hr", (workers, twenty_four_hour_shift_pairs), 0, 1, pulp.LpBinary)  # 0 or 1 if does both.
-        # Extra boxes for if w assigned to both in bad spacing pair (1 if yes, 0 no).
-        spacing_var = pulp.LpVariable.dicts("SpacingBad", (workers, bad_spacing_pairs), 0, 1, pulp.LpBinary)  # Yes/no for each w and pair.
-
-        # Goal: Maximize goals: points for filled, preferred, spacing, 24hr.
-        prob += (
-        points_filled * pulp.lpSum(assign_vars[w][shift] for w in workers for shift in empty_shifts)  # points for each filled.
-        + points_preferred * pulp.lpSum(assign_vars[w][shift] for w in workers for shift in empty_shifts if shift in worker_prefers[w])  # +points for preferred.
-        + points_spacing * pulp.lpSum(spacing_var[w][pair] for w in workers for pair in bad_spacing_pairs)  # points for each bad spacing pair assigned to same w (both 1).
-        + points_24hr * pulp.lpSum(twenty_four_vars[w][pair] for w in workers for pair in twenty_four_hour_shift_pairs) # points for each 24-hour shift
-        )
-
-        # Constraints (rules).
-        # 1. At most one worker per shift (allow 0 to fill as many as possible).
-        for shift in empty_shifts:
-            prob += pulp.lpSum(assign_vars[w][shift] for w in workers) <= 1  # 0 or 1.
-        
-        # 2. Shifts per worker match range.
-        for w in workers:
-            min_shifts, max_shifts = next(worker["shifts_to_fill"] for worker in workers_list if worker["name"] == w)
-            prob += pulp.lpSum(assign_vars[w][shift] for shift in empty_shifts) <= max_shifts  # At most max.
-            prob += pulp.lpSum(assign_vars[w][shift] for shift in empty_shifts) >= min_shifts  # At least min.
-        
-        # 3. No night to day (hard rule).
-        for pair in bad_night_to_day_pairs:
-            night, day = pair  # Unpack the pair.
-            for w in workers:
-                prob += assign_vars[w][night] + assign_vars[w][day] <= 1  # Can't be 2 (both).        
-
-        # 4. No adjacent nights (hard rule).
-        # 4. No adjacent nights (hard rule)
-        if enforce_no_adj_nights:
-            for pair in bad_adjacent_nights_pairs:
-                current, next_shift = pair
-                for w in workers:
-                    prob += assign_vars[w][current] + assign_vars[w][next_shift] <= 1
-
-        # 5. No adjacent days (Day-to-Day) (hard rule)
-        if enforce_no_adj_days:
-            for pair in bad_adjacent_days_pairs:
-                current, next_shift = pair
-                for w in workers:
-                    prob += assign_vars[w][current] + assign_vars[w][next_shift] <= 1
-
-        # 6. Cap limit for 24-hour shifts (Day X and Night X same day).
-        # Use twenty_four_hour_shift_pairs – but filter for empty (PuLP can affect).
-        # Hard limit: Sum of 24-hour for w <= max_24hr.
-        # Soft: -2 points for each 24-hour.
-
-        # Link: For each pair, twenty_four_vars[w][pair] == assign_vars[w][day] + assign_vars[w][night] == 2 (but since binary, if both 1, =1).
-        for pair in twenty_four_hour_shift_pairs:
-            day, night = pair
-            for w in workers:
-                prob += twenty_four_vars[w][pair] >= assign_vars[w][day] + assign_vars[w][night] - 1  # If both 1, >=1, so =1.
-                prob += twenty_four_vars[w][pair] <= assign_vars[w][day]  # If not day, <=0.
-                prob += twenty_four_vars[w][pair] <= assign_vars[w][night]  # If not night, <=0.
-
-        # Hard limit: Sum twenty_four_vars[w][pair] for all pairs <= max_24hr[w].
-        for w in workers:
-            prob += pulp.lpSum(twenty_four_vars[w][pair] for pair in twenty_four_hour_shift_pairs) <= max_24hr[w]  # Max.
-
-        # 7: Max weekend shifts
-        for w in workers:
-            prob += pulp.lpSum(assign_vars[w][shift] for shift in empty_weekend_shifts) <= max_weekends[w]  # <= max.
-
-        # 8: Bad spacing pairs
-        # Rules to set the extra box right (similar to 24-hour).
-        for pair in bad_spacing_pairs:  # Loop bad pairs.
-            s1, s2 = pair  # Unpack (s1 = first, s2 = second).
-            for w in workers:  # For each worker.
-                prob += spacing_var[w][pair] >= assign_vars[w][s1] + assign_vars[w][s2] - 1  # If both 1, >=1 (must be 1).
-                prob += spacing_var[w][pair] <= assign_vars[w][s1]  # If not s1, <=0 (must be 0).
-                prob += spacing_var[w][pair] <= assign_vars[w][s2]  # If not s2, <=0.
-
-        ## Fence for "cannot work" – don't assign worker to "NO" shifts.
-        for w in workers:  # Loop each worker name.
-            for f in worker_cannot[w]:  # Loop each "NO" shift f for w.
-                if f in empty_shifts:  # If f is empty (PuLP can assign it).
-                    prob += assign_vars[w][f] <= 0  # Must be 0 (no assign).
-
-
-       # Make the map to CBC.exe – like telling PuLP where the tool is.
-        if hasattr(sys, '_MEIPASS'):  # Check if we're in .exe mode (a special box PyInstaller adds)
-            cbc_path = os.path.join(sys._MEIPASS, 'cbc.exe')  # Glue temp spot + file name
-        else:  # Normal .py mode
-            cbc_path = 'cbc.exe'  # Use the one in your folder
-        print(f"Using CBC path: {cbc_path}")  # Note to check in console
-
-        # Solve with messages and time limit.
-        print("Starting PuLP solve – time limit 60 seconds...")
-        # Solve the problem
-#        status = prob.solve(pulp.COIN_CMD(msg=1, timeLimit=60, path=cbc_path)) # TURN THIS ON if app running on PC with CBC.exe, and file is .exe
-        status = prob.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=60)) # TURN THIS ON if app running on PC without CBC.exe, and file is .py
-        # Check the result
-        if pulp.LpStatus[status] == "Infeasible":
-            # STOP! The rules are impossible to satisfy
-            error_label.config(text="ERROR: Impossible to create rota with current rules! Check shift ranges, max weekends, max 24hr shifts.")
-            print("INFEASIBLE: Cannot create a valid rota with these constraints.")
-            return  # STOP HERE - don't continue
-        elif pulp.LpStatus[status] == "Optimal":
-            print("Found best solution in time!")
-        elif pulp.LpStatus[status] == "Not Solved":
-            print("Timed out – showing best found so far.")
-        else:
-            print("Other issue:", pulp.LpStatus[status])
-            error_label.config(text=f"Solver issue: {pulp.LpStatus[status]}")
-            return  # Stop if something unexpected happened
-
-        print(f"Solve finished! Status: {pulp.LpStatus[status]}")  # Shows if it worked (e.g., "Optimal")
-
-        # Add assignments (same as before, even if timed out).
-        for w in workers:
-            for shift in empty_shifts:
-                if assign_vars[w][shift].value() == 1:
-                    assignments[shift] = w
-        print("Assignments done!")
-
-        # Print the total points (the score from the goal).
-        total_points = prob.objective.value()  # Get the number from PuLP's goal box.
-        print("Total points for this rota:", total_points)  # Show it.
-
-    # Show final assignments.
-    print("Final Rota:")
-    for shift, worker in assignments.items():
-        print(f"{shift}: {worker if worker else 'Unassigned'}")
-
-    # Count and print the summary at the end (how many preferences, 24-hour, bad spacing).
-    preferences_count = 0  # Start count at 0 – like an empty basket for good things.
-    twenty_four_count = 0  # For 24-hour.
-    bad_spacing_count = 0  # For bad close.
-
-    # Get worker prefers and cannot (boxes from earlier).
-    worker_prefers = {w["name"]: w["prefers"] for w in workers_list}  # Worker: list of preferred.
-
-    # Loop all assignments to count.
-    for shift, worker in assignments.items():  # Loop each shift and who (worker or None).
-        if worker is None:  # Skip empty.
-            continue
-
-        # Count preferences: If shift in worker's prefers.
-        if shift in worker_prefers[worker]:  # If preferred.
-            preferences_count += 1  # Add 1.
-
-    # For 24-hour and spacing, reuse grouping.
-    worker_shifts = {}  # Box worker: list of their shifts.
-    for shift, worker in assignments.items():
-        if worker is not None:
-            if worker not in worker_shifts:
-                worker_shifts[worker] = []
-            worker_shifts[worker].append(shift)
-
-    for worker, shifts in worker_shifts.items():  # Loop workers and their shifts.
-        sorted_shifts = sorted(shifts, key=lambda s: int(s.split(" ")[1]))  # Sort by day.
-        for i in range(len(sorted_shifts) - 1):  # Loop pairs.
-            current = sorted_shifts[i]
-            next_shift = sorted_shifts[i+1]
-            current_day = int(current.split(" ")[1])
-            next_day = int(next_shift.split(" ")[1])
-            if current_day == next_day:  # Same day – 24-hour.
-                twenty_four_count += 1  # Add 1.
-            if next_day - current_day < 5:  # Close – bad spacing.
-                bad_spacing_count += 1  # Add 1.
-
-    # Print the counts.
-    print("Summary:")
-    print("Number of preferred shifts assigned:", preferences_count)
-    print("Number of 24-hour shifts:", twenty_four_count)
-    print(f"Number of bad spacing pairs (<{spacing_days_threshold} days apart, not shifts):", bad_spacing_count)
+    """
+    This is the NEW create_rota function in main.py.
+    It's much simpler - it just:
+    1. Collects all the data from the GUI
+    2. Packages it up
+    3. Sends it to solver.py
+    4. Gets the results back
+    5. Shows the results to the user
+    """
     
-    # Create popup to display results
+    # ========================================================================
+    # PART A: Gather all the settings into a dictionary
+    # ========================================================================
+    # Think of this like packing a suitcase before a trip
+    
+    settings = {
+        "points_filled": points_filled,
+        "points_preferred": points_preferred,
+        "points_spacing": points_spacing,
+        "spacing_days_threshold": spacing_days_threshold,
+        "points_24hr": points_24hr,
+        "enforce_no_adj_nights": enforce_no_adj_nights,
+        "enforce_no_adj_days": enforce_no_adj_days
+    }
+    
+    # ========================================================================
+    # PART B: Call the solver
+    # ========================================================================
+    # This is where the magic happens!
+    # We send our data to solver.py and get the results back
+    
+    # The imported create_rota function from solver.py
+    assignments, summary = solve_rota(shifts_list, workers_list, settings)
+    
+    # ========================================================================
+    # PART C: Update the shifts_list with the new assignments
+    # ========================================================================
+    # The solver returns a dictionary like {"Day 1": "John", "Night 1": "Sarah"}
+    # We need to update our shifts_list to match
+    
+    for shift in shifts_list:
+        shift["assigned_worker"] = assignments.get(shift["name"])
+    
+    # ========================================================================
+    # PART D: Print results to console (for debugging)
+    # ========================================================================
+    print("Final Rota:")
+    for shift_name, worker in assignments.items():
+        print(f"{shift_name}: {worker if worker else 'Unassigned'}")
+    
+    # ========================================================================
+    # PART E: Check if solver failed
+    # ========================================================================
+    if summary["status"] == "Infeasible":
+        error_label.config(text="ERROR: Impossible to create rota with current rules! Check shift ranges, max weekends, max 24hr shifts.")
+        return  # Stop here - don't show popup
+    
+    if summary["status"] == "Nothing to assign":
+        error_label.config(text="No empty shifts or no workers – nothing to assign.")
+        return  # Stop here
+    
+    # ========================================================================
+    # PART F: Create popup window to show results
+    # ========================================================================
     popup = Toplevel(root)
     popup.title("Rota Results")
-
-    # Create a Text widget instead of using Labels in a grid
-    # Text widget is like a text editor - you can select and copy from it
+    
+    # Create a Text widget (like a mini text editor)
     text_widget = Text(popup, wrap="none", width=60, height=30)
     text_widget.pack(side="left", fill="both", expand=True)
-
-    # Create scrollbar for the Text widget
+    
+    # Create scrollbar
     scrollbar = Scrollbar(popup, orient="vertical", command=text_widget.yview)
     scrollbar.pack(side="right", fill="y")
     text_widget.config(yscrollcommand=scrollbar.set)
-
+    
+    # Mouse wheel scrolling
     def on_popup_mousewheel(event):
         text_widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
     
     popup.bind("<MouseWheel>", on_popup_mousewheel)
     text_widget.bind("<MouseWheel>", on_popup_mousewheel)
-
-    # Now we INSERT text into the Text widget instead of creating Labels
-    # Start building the text to display
-    text_widget.insert("end", "Final Rota:\n", "title")  # "end" means add to the end
-    text_widget.insert("end", "=" * 60 + "\n\n", "separator")  # Line of equals signs
-
-    # Add headers
+    
+    # Add title
+    text_widget.insert("end", "Final Rota:\n", "title")
+    text_widget.insert("end", "=" * 60 + "\n\n", "separator")
+    
+    # Add column headers
     text_widget.insert("end", f"{'Day':<7}{'Day Shift':<25}{'Night Shift':<15}\n", "header")
     text_widget.insert("end", "-" * 60 + "\n", "separator")
-
-    # Add assignments
+    
+    # Add each day's assignments
     for day in days_list:
         day_shift = f"Day {day}"
         night_shift = f"Night {day}"
         day_worker = assignments.get(day_shift, "No shift")
         night_worker = assignments.get(night_shift, "No shift")
         
-        # Format the line nicely with spacing
         day_text = str(day)
         day_worker_text = day_worker if day_worker else "Unassigned"
         night_worker_text = night_worker if night_worker else "Unassigned"
         
         text_widget.insert("end", f"{day_text:<5}{day_worker_text:<15}{night_worker_text:<15}\n")
-
+    
     # Add summary section
     text_widget.insert("end", "\n" + "=" * 60 + "\n", "separator")
     text_widget.insert("end", "Summary:\n", "title")
     text_widget.insert("end", "-" * 60 + "\n", "separator")
-    text_widget.insert("end", f"Number of preferred shifts assigned: {preferences_count}\n")
-    text_widget.insert("end", f"Number of 24-hour shifts: {twenty_four_count}\n")
-    text_widget.insert("end", f"Number of bad spacing pairs (<5 days apart): {bad_spacing_count}\n")
-
-    # Make some text bold/bigger (optional styling)
+    text_widget.insert("end", f"Number of preferred shifts assigned: {summary['preferences_count']}\n")
+    text_widget.insert("end", f"Number of 24-hour shifts: {summary['twenty_four_count']}\n")
+    text_widget.insert("end", f"Number of bad spacing pairs (<{spacing_days_threshold} days apart): {summary['bad_spacing_count']}\n")
+    
+    # Style the text
     text_widget.tag_config("title", font=("Arial", 12, "bold"))
     text_widget.tag_config("header", font=("Arial", 10, "bold"))
     text_widget.tag_config("separator", foreground="gray")
-
-    # Make the text read-only (so users can't accidentally edit it)
-    # But they CAN still select and copy!
+    
+    # Make it read-only (but still copyable)
     text_widget.config(state="disabled")
 
 # ---------------------------------------------------------------
