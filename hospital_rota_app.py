@@ -7,8 +7,8 @@ import json # Bring in functionality of saving/loading javascript object notatio
 from tkinter import *  # Bring in the Tkinter toolbox for the window (GUI).
 from tkinter import filedialog
 import openpyxl # Allows to use .xlsx files
-from selection_popups import prefer_count, cannot_count, manual_count
-from solver import solve_rota
+from selection_popups import prefer_count, cannot_count, manual_count # bring popup_select_shifts functions from a another file
+from solver import solve_rota # bring PuLP solver from another file
 
 # --------------------------------------------------------------------
 # App plan:
@@ -678,6 +678,7 @@ def pulp_settings():
             include_weekday_days  = bool(include_weekday_var.get())
 
             error_label.config(text="PuLP settings updated successfully!")
+
             popup.destroy()
         except ValueError:
             error_label.config(text="Error: All values must be integers.")
@@ -1127,8 +1128,8 @@ def create_rota():
     # The solver returns a dictionary like {"Day 1": "John", "Night 1": "Sarah"}
     # We need to update our shifts_list to match
     
-    for shift in shifts_list:
-        shift["assigned_worker"] = assignments.get(shift["name"])
+    # for shift in shifts_list:                                     IF THIS IS TURNED ON, then if trying to run create_rota again will run on full rota, even if changed parameters.
+    # shift["assigned_worker"] = assignments.get(shift["name"])     IF THIS IS TURNED OFF, only the manually assigned workers stay assigned, the rest are left unassigned and can run create_rota again, with possibly new results
     
     # ========================================================================
     # PART D: Print results to console (for debugging)
