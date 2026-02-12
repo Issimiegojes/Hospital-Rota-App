@@ -253,6 +253,78 @@ def cannot_count(cannot_popup_inputs):
     Button(scrollable_frame, text="Save Selection", 
            command=save_selection).grid(row=check_all_row + 1, column=0, columnspan=4)
     
+def prefer_unit_count(prefer_unit_popup_inputs):
+
+    root = prefer_unit_popup_inputs["give_root"]
+    days_list = prefer_unit_popup_inputs["give_days_list"]
+    starting_weekday = prefer_unit_popup_inputs["give_starting_weekday"]
+    worker_rows = prefer_unit_popup_inputs["give_worker_rows"]
+    row_num = prefer_unit_popup_inputs["give_row_num"]
+    selected_manual_days = prefer_unit_popup_inputs["give_selected_manual_days"]
+    error_label = prefer_unit_popup_inputs["give_error_label"]
+    units_list = prefer_unit_popup_inputs["give_units_list"]
+    selected_units = prefer_unit_popup_inputs["give_selected_units"]
+
+    popup = Toplevel(root)
+    popup.title("Select Units")
+
+    # Create a canvas and scrollbar for scrolling
+    canvas = Canvas(popup)
+    scrollbar = Scrollbar(popup, orient="vertical", command=canvas.yview)
+    scrollable_frame = Frame(canvas)
+
+    scrollable_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    def on_popup_mousewheel(event):
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    popup.bind("<MouseWheel>", on_popup_mousewheel)
+    canvas.bind("<MouseWheel>", on_popup_mousewheel)
+
+    Label(scrollable_frame, text=str("List of units")).grid(row=0, column=0)
+
+    unit_vars = [] # Will be used for pre-selecting and saving selection
+
+    for i, unit in enumerate(units_list, start=1):
+        Label(scrollable_frame, text=str(unit)).grid(row=i, column=0)
+        # Unit checkbox
+        unit_var = IntVar()
+        Checkbutton(scrollable_frame, variable=unit_var).grid(row=i, column=2)
+        unit_vars.append((f"{unit}", unit_var))
+
+    # Pre-select checkboxes based on existing selections for this row_num
+    existing_selections = selected_units.get(row_num, [])
+    for unit, var in unit_vars: # Go through all units vars
+        if unit in existing_selections: # If "Internal Medicine" is in existing_selections, var.set(1) for "Internal Medicine"
+            var.set(1)
+
+    check_all_row = len(units_list)
+
+    def save_selection():
+        selected_units_list = [unit for unit, var in unit_vars if var.get() == 1] # Gives ["Cardiology", "Oncology"]
+        selected_units[row_num] = selected_units_list
+        # Update button text
+        for row_widgets in worker_rows:
+            if row_widgets['row_num'] == row_num:
+                num = len(selected_units_list)
+                row_widgets['prefer_unit_button'].config(text=f"Select ({num})" if num > 0 else "Select")
+                break
+        if selected_units_list:
+            error_label.config(text=f"Worker prefers these units: {', '.join(selected_units_list)}")
+        else:
+            error_label.config(text="")
+        popup.destroy()
+
+    Button(scrollable_frame, text="Save Selection", command=save_selection).grid(row=check_all_row + 1, column=0)
+
 def manual_count(manual_popup_inputs):
 
     root = manual_popup_inputs["give_root"]
