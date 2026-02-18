@@ -9,6 +9,7 @@ from tkinter import filedialog
 import openpyxl # Allows to use .xlsx files
 from selection_popups import prefer_count, cannot_count, prefer_unit_count, manual_count # bring popup_select_shifts functions from a another file
 from solver import solve_rota # bring PuLP solver from another file
+from date_settings import save_year_confirm, save_month_confirm, save_holidays_confirm
 
 # --------------------------------------------------------------------
 # App plan:
@@ -68,17 +69,18 @@ year_entry.pack(side=LEFT)  # Next to label.
 
 # Function for save year (like button press).
 def save_year():
-    global year  # Use the year box outside.
-    year_input = year_entry.get().strip()  # Get from type box and strip whitespace.
-    try:
-        year = int(year_input)
-        if year < 1900 or year > 2100:
-            error_label.config(text="Bad year – 1900-2100.")  # Show error.
-        else:
-            current_year_label.config(text="Current Year: " + str(year))  # Update show.
-            error_label.config(text="")  # Clear error.
-    except ValueError:
-        error_label.config(text="Not a number!")
+    global year
+
+    save_year_inputs = {
+        "give_year_entry": year_entry,
+        "give_error_label": error_label,
+        "give_current_year_label": current_year_label,
+        "give_year": year,
+    }
+    
+    result = save_year_confirm(save_year_inputs)
+    if result is not None:
+        year = result
 
 # Button inside frame.
 Button(year_frame, text="Save", command=save_year).pack(side=LEFT)  # Button next.
@@ -94,36 +96,51 @@ month_frame.pack()
 month_entry = Entry(month_frame)  # Type box.
 month_entry.pack(side=LEFT)
 
-def save_month():  # Function for the button.
-    global month, num_days, starting_weekday, days_list, shifts_list  # Use these boxes outside – add shifts_list.
-    month_input = month_entry.get()  # Get from type box.
-    try:
-        month = int(month_input)
-        if month < 1 or month > 12:
-            error_label.config(text="Please enter a month between 1 and 12.")  # Error.
-            return  # Stop early if bad.
-        # Calculate details.
-        month_details = calendar.monthrange(year, month)
-        starting_weekday = month_details[0]  # Weekday for Day 1.
-        num_days = month_details[1]  # Days in month.
-        # Make the days list
-        days_list = []  # Empty list to hold days.
-        for day in range(1, num_days + 1):  # Loop from 1 to num_days +1 (to include last).
-            days_list.append(day)  # Add day to list.
-        # Show the details.
-        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]  # Group of day names.
-        # Show the days list.
-        month_name_list = ["January", "February", "March", "April", "May", "June", "July", "September", "October", "November", "December"]
-        month_name = month_name_list[month-1]
-        current_month_label.config(text="Current Month: " + str(month_name)) # Update month
-        error_label.config(text=f"{month_name} has {len(days_list)} days, start of the weekday: {day_names[starting_weekday]}")  # Update result.
-    except ValueError:
-        error_label.config(text="That's not a number! Please try again.")  # Error.
+def save_month():
+    global year, month, num_days, starting_weekday, days_list
+
+    save_month_inputs = {
+        "give_month_entry": month_entry,
+        "give_error_label": error_label,
+        "give_current_month_label": current_month_label,
+        "give_month": month,
+        "give_year": year,
+    }
+
+    month, num_days, starting_weekday, days_list = save_month_confirm(save_month_inputs)
+
 
 Button(month_frame, text="Save", command=save_month).pack(side=LEFT)  # Button, click runs save_month.
 
 current_month_label = Label(month_frame, text="Current Month: None")
 current_month_label.pack(side=LEFT)
+
+Label(root, text="Enter public holiday days, separated by comma (e.g., 24,25,26) or leave blank:").pack()  # Text label.
+
+holiday_frame = Frame(root)
+holiday_frame.pack()
+
+# Label and type box for holidays.
+holiday_entry = Entry(holiday_frame)  # Type box.
+holiday_entry.pack(side=LEFT)
+
+def save_holidays():  # Function for the button.
+    global holiday_days  # Use the holiday_days box outside.
+
+    save_holidays_inputs = {
+        "give_year": year,
+        "give_month": month,
+        "give_holiday_entry": holiday_entry,
+        "give_holidays_label": holidays_label,
+        "give_error_label": error_label,
+    }
+
+    holiday_days = save_holidays_confirm(save_holidays_inputs)
+
+Button(holiday_frame, text="Save", command=save_holidays).pack(side=LEFT)  # Button, click runs save_holidays.
+
+holidays_label = Label(holiday_frame, text="Holiday List: None")
+holidays_label.pack(side=RIGHT)
 
 Label(root, text="Units (comma-separated, e.g. Internal Medicine,Cardiology):").pack()
 
@@ -238,46 +255,6 @@ def show_manual_popup(row_num):
     }
     
     manual_count(manual_popup_inputs)
-
-
-Label(root, text="Enter public holiday days, separated by comma (e.g., 24,25,26) or leave blank:").pack()  # Text label.
-
-holiday_frame = Frame(root)
-holiday_frame.pack()
-
-# Label and type box for holidays.
-holiday_entry = Entry(holiday_frame)  # Type box.
-holiday_entry.pack(side=LEFT)
-
-def save_holidays():  # Function for the button.
-    global holiday_days  # Use the holiday_days box outside.
-    holiday_input = holiday_entry.get()  # Get from type box.
-    holiday_days = []  # Start empty.
-    if holiday_input.strip() == "":  # If blank.
-        holiday_days = []
-        holidays_label.config(text="Holiday List: None")
-        error_label.config(text="")  # Clear error.
-        return  # Done.
-    parts = holiday_input.split(",")  # Cut at commas.
-    try:
-        holiday_days = [int(part.strip()) for part in parts]  # Turn to numbers.
-        invalid_days = []
-        for h_day in holiday_days[:]:  # Copy to avoid remove issues.
-            if h_day < 1 or h_day > num_days:  # Out of range.
-                invalid_days.append(h_day)
-                holiday_days.remove(h_day)
-        if invalid_days:
-            error_label.config(text=f"Error: These days are invalid (must be 1-{num_days}): {invalid_days}")  # Show error.
-            return  # Stop early.
-        holidays_label.config(text="Holiday List: " + str(holiday_days))
-        error_label.config(text="")  # Clear if good.
-    except ValueError:
-        error_label.config(text="Error: Some entries weren't numbers. Please try again.")  # Error.
-
-Button(holiday_frame, text="Save", command=save_holidays).pack(side=LEFT)  # Button, click runs save_holidays.
-
-holidays_label = Label(holiday_frame, text="Holiday List: None")
-holidays_label.pack(side=RIGHT)
 
 make_shifts_button_frame = Frame(root)
 make_shifts_button_frame.pack()
