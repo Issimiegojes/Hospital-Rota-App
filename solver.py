@@ -9,7 +9,6 @@ import pulp
 import sys
 import os
 
-
 def solve_rota(shifts_list, workers_list, units_list, settings):
     """
     Multi-unit rota solver.
@@ -25,8 +24,9 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
     # ============================================================================
     # STEP 1: Extract settings
     # ============================================================================
-    points_filled = settings.get("points_filled", 100)
+    points_filled = settings.get("points_filled", 100) # The .get method is used instead of settings["points_filled"] because it provides a fallback value: 100, in case the value doesn't exist yet
     points_preferred = settings.get("points_preferred", 5)
+    points_preferred_unit = settings.get("points_preferred_unit", 5)
     points_spacing = settings.get("points_spacing", -1)
     spacing_days_threshold = settings.get("spacing_days_threshold", 5)
     points_24hr = settings.get("points_24hr", -10)
@@ -156,6 +156,11 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
     # ============================================================================
     # STEP 7: Extract worker preferences and limits
     # ============================================================================
+    # Convert from {row_num: ["Cardiology"]} to {"Dr. Smith": ["Cardiology"]}
+    worker_preferred_units = {}
+    for w in workers_list:
+        worker_preferred_units[w["name"]] = w.get("prefer_units", [])
+    
     max_24hr = {w["name"]: w["max_24hr"] for w in workers_list}
     max_weekends = {w["name"]: w["max_weekends"] for w in workers_list}
 
@@ -230,6 +235,10 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
                                        for w in workers 
                                        for shift in empty_shifts 
                                        if shift in worker_prefers[w])
+        + points_preferred_unit * pulp.lpSum(assign_vars[w][shift]
+                                        for w in workers
+                                        for shift in empty_shifts
+                                        if parse_shift_name(shift)[2] in worker_preferred_units[w])
         + points_spacing * pulp.lpSum(spacing_var[w][pair] 
                                      for w in workers 
                                      for pair in bad_spacing_pairs)
@@ -330,16 +339,25 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
     # ============================================================================
     # STEP 13: Solve the problem
     # ============================================================================
-    print("Starting PuLP solve – time limit 60 seconds...")
-    
-    # Choose solver based on environment
+    print("Starting PuLP solve – time limit 6000 seconds...")
+    timeLimit_setting = 6000
+
+    # Falls back to CBC if not .exe file:
     if hasattr(sys, '_MEIPASS'):
         cbc_path = os.path.join(sys._MEIPASS, 'cbc.exe')
-        status = prob.solve(pulp.COIN_CMD(msg=1, timeLimit=60, path=cbc_path))
+        status = prob.solve(pulp.COIN_CMD(msg=1, timeLimit=timeLimit_setting, path=cbc_path))
     else:
-        status = prob.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=600000))
-    
-    # ============================================================================
+        status = prob.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=timeLimit_setting))
+       # try: this part uses highspy/highsolver, but crashes on "Presolving model"
+       #     # Use highspy directly (Python API, no executable needed)
+       #     solver = pulp.getSolver('HiGHS')
+       #     status = prob.solve(solver)
+       #     print("Used HiGHS solver via highspy")
+       # except Exception as e:
+       #     print(f"HiGHS failed — exact reason: {e}")
+       #     status = prob.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=timeLimit_setting))
+
+# ============================================================================
     # STEP 14: Check solution status
     # ============================================================================
     if pulp.LpStatus[status] == "Infeasible":
