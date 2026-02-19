@@ -1,4 +1,3 @@
-
 from tkinter import *
 
 def prefer_count(prefer_popup_inputs):
