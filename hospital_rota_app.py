@@ -38,11 +38,11 @@ day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 
 # Settings for PuLP: points, hard rules; Other settings: shift making
 points_filled = 100
-points_preferred = 5
-points_preferred_unit = 5
-points_spacing = -1
-spacing_days_threshold = 5  # How many days apart triggers the penalty
-points_24hr = -10
+points_preferred = 1
+points_preferred_unit = 3
+points_spacing = -2
+spacing_days_threshold = 4  # How many days apart triggers the penalty
+points_24hr = -3
 enforce_no_adj_nights = True   # Night → Night next day
 enforce_no_adj_days = True   # Day → Day next day hard rule
 include_weekday_days = False   # False = default behaviour (skip Mon-Fri day shifts when making shifts)
@@ -257,9 +257,6 @@ def show_manual_popup(row_num):
     
     manual_count(manual_popup_inputs)
 
-make_shifts_button_frame = Frame(root)
-make_shifts_button_frame.pack()
-
 add_worker_button_frame = Frame(root)
 add_worker_button_frame.pack()
 
@@ -272,7 +269,7 @@ worker_container.pack()
 
 # Create the canvas (drawing board)
 global worker_canvas, worker_scrollbar, worker_inner_frame
-worker_canvas = Canvas(worker_container, width=915, borderwidth=2, relief="groove")  # Height=200 pixels – change if you want taller/shorter
+worker_canvas = Canvas(worker_container, width=833, borderwidth=2, relief="groove")  # Height=200 pixels – change if you want taller/shorter
 worker_canvas.pack(side=LEFT, fill="both")  # Put on left, fill space
 
 # Create the scrollbar and link it to the canvas
@@ -361,15 +358,13 @@ def make_shifts():  # New function for making shifts list.
         for shift in shifts_list:  # Loop to print each one.
             print(f"Shift: {shift['name']}, Tags: {shift['tags']}, Type: {shift['type']}, Assigned: {shift['assigned_worker']}")
 
-Button(make_shifts_button_frame, text="Make Shifts", command=make_shifts, width=10).pack()  # Button, click runs make_shifts.
-
 # Box to show the shifts list.
 #shifts_label = Label(root, text="Shifts made: None")  # Start None.
 #shifts_label.pack()  # Put on window.
 
 # Frame for workers – like a big shelf for the table.
 workers_frame = Frame(worker_inner_frame)  # NEW: Pack to inner_frame
-workers_frame.pack(fill="x")  # NEW: Fill horizontal, stack vertical
+workers_frame.pack(fill="x")  # Fill horizontal, stack vertical
 
 # Configure columns to have fixed width of 50
 for col in range(10):
@@ -385,8 +380,7 @@ Label(workers_frame, text="Max 24hr", width=10, padx=2, pady=2).grid(row=0, colu
 Label(workers_frame, text="Prefer Unit", width=10, padx=2, pady=2).grid(row=0, column=6, sticky="ew", padx=2, pady=2)
 Label(workers_frame, text="Manual Shifts", width=10, padx=2, pady=2).grid(row=0, column=7, sticky="ew", padx=2, pady=2)
 Label(workers_frame, text="Save", width=10, padx=2, pady=2).grid(row=0, column=8, sticky="ew", padx=2, pady=2)
-Label(workers_frame, text="Assign Manual", width=10, padx=2, pady=2).grid(row=0, column=9, sticky="ew", padx=2, pady=2)
-Label(workers_frame, text="Delete", width=10, padx=2, pady=2).grid(row=0, column=10, sticky="ew", padx=2, pady=2)
+Label(workers_frame, text="Delete", width=10, padx=2, pady=2).grid(row=0, column=9, sticky="ew", padx=2, pady=2)
 
 # List to hold worker rows (for delete).
 worker_rows = []  # Empty list to store widget references for each row.
@@ -394,6 +388,15 @@ worker_row_number = 1  # Start row 1 (after 0 headers)
 
 def add_worker_row():  # Function for "Add Worker" button.
     global worker_row_number, workers_list
+    
+    if year is None or month is None:
+        error_label.config(text="Error: Please set year and month before adding workers.")
+        return
+
+    if not units_list:
+        error_label.config(text="Error: Please define units before adding workers.")
+        return
+    
     row_num = worker_row_number  # Capture the current row number for this row
 
     # Column 0: Name box - placed directly in workers_frame.
@@ -432,13 +435,9 @@ def add_worker_row():  # Function for "Add Worker" button.
     save_button = Button(workers_frame, text="Save", width=10, command=lambda: save_worker(row_num))
     save_button.grid(row=row_num, column=8, sticky="ew", padx=2, pady=2)
 
-    # Column 9: Manual save button.
-    manual_save_button = Button(workers_frame, text="Assign", width=10, command=lambda: save_manual(row_num))
-    manual_save_button.grid(row=row_num, column=9, sticky="ew", padx=2, pady=2)
-
-    # Column 10: Delete button.
+    # Column 9: Delete button.
     delete_button = Button(workers_frame, text="Delete", width=10, command=lambda: delete_row(row_num))
-    delete_button.grid(row=row_num, column=10, sticky="ew", padx=2, pady=2)
+    delete_button.grid(row=row_num, column=9, sticky="ew", padx=2, pady=2)
 
     # Store all widgets for this row for deletion purposes
     row_widgets = {
@@ -451,7 +450,6 @@ def add_worker_row():  # Function for "Add Worker" button.
         'prefer_unit_button': prefer_unit_button,
         'manual_button': manual_button,
         'save_button': save_button,
-        'manual_save_button': manual_save_button,
         'delete_button': delete_button,
         'row_num': row_num
     }
@@ -466,21 +464,6 @@ def add_worker_row():  # Function for "Add Worker" button.
         range_input = range_entry.get().strip()  # Get shift range.
         max_weekends_input = max_weekends_entry.get().strip()  # Get max weekends.
         max_24hr_input = max_24hr_entry.get().strip()  # Get max 24-hour.
-
-        # Check if shifts_list is created, because the assign/unassign function will not work
-        global shifts_list
-        try:
-            if not shifts_list:
-                error_label.config(text="Shifts list is not created. Cannot save worker.")
-                return
-        except NameError:
-            error_label.config(text="Shifts list is not created. Cannot save worker.")
-            return
-
-        # Unassign all shifts assigned to this worker's name before saving
-        for shift in shifts_list:
-            if shift["assigned_worker"] == name:
-                shift["assigned_worker"] = None
 
         # Check if name is not blank.
         if name == "":  # If empty.
@@ -551,11 +534,8 @@ def add_worker_row():  # Function for "Add Worker" button.
             existing_worker["prefer_units"] = prefer_units
             existing_worker["max_weekends"] = max_weekends
             existing_worker["max_24hr"] = max_24hr
-            # Check if there were manually selected shifts
-            had_manual_shifts = bool(selected_manual_days.get(row_num, []))
+            # Show message if succesful
             message = f"Worker '{name}' updated!"
-            if had_manual_shifts:
-                message += " Manually assigned shifts cleared."
             error_label.config(text=message)  # Show success.
         else:  # If not found (new worker)
             # Create new worker dictionary
@@ -637,6 +617,31 @@ def add_worker_row():  # Function for "Add Worker" button.
         else:
             error_label.config(text="No shifts assigned.")
 
+def assign_all_manual_shifts():
+    """
+    Loops through every worker and assigns their manually selected shifts.
+    
+    Called automatically inside create_rota(), AFTER make_shifts().
+    Does NOT change shift ranges in workers_list or update GUI widgets.
+    """
+    for worker in workers_list:
+        row_num = worker["worker_row_number"]
+        name = worker["name"]
+        
+        # Get this worker's manually selected shifts
+        # .get() returns [] as default if row_num not found - avoids a crash
+        manual_shifts = selected_manual_days.get(row_num, [])
+        
+        for shift_name in manual_shifts:
+            # Search through shifts_list to find the matching shift
+            for shift in shifts_list:
+                if shift["name"] == shift_name:
+                    # Only assign if not already taken
+                    if shift["assigned_worker"] is None:
+                        shift["assigned_worker"] = name
+                    else:
+                        print(f"Warning: {shift_name} already assigned to {shift['assigned_worker']}, skipping.")
+                    break  # Found the shift - no need to keep searching
 
 def delete_row(row_num):
     # Find the worker's name before deleting
@@ -1329,7 +1334,16 @@ def create_rota():
     4. Gets the results back
     5. Shows the results to the user
     """
+    # =======================================================================
+    # Preparation: make shifts and assign workers with manual select shifts
+    # =======================================================================
+    make_shifts()  # Build fresh shifts list
     
+    # Guard: if shifts_list is still empty, stop
+    if not shifts_list:
+        return  # make_shifts() already showed the error message
+    
+    assign_all_manual_shifts()  # Lock in manual assignments before solver runs
     # ========================================================================
     # PART A: Gather all the settings into a dictionary
     # ========================================================================
@@ -1389,7 +1403,7 @@ def create_rota():
     popup.title("Rota Results")
     
     # Create a Text widget (like a mini text editor)
-    text_widget = Text(popup, wrap="none", width=60, height=30)
+    text_widget = Text(popup, wrap="none", width=60, height=30, font=("Courier", 10))
     text_widget.pack(side="left", fill="both", expand=True)
     
     # Create scrollbar
@@ -1453,9 +1467,9 @@ def create_rota():
     text_widget.insert("end", f"Number of bad spacing pairs (<{spacing_days_threshold} days apart): {summary['bad_spacing_count']}\n")
     
     # Style the text
-    text_widget.tag_config("title", font=("Arial", 12, "bold"))
-    text_widget.tag_config("unit_header", font=("Arial", 11, "bold"), foreground="blue")
-    text_widget.tag_config("header", font=("Arial", 10, "bold"))
+    text_widget.tag_config("title", font=("Courier", 12, "bold"))
+    text_widget.tag_config("unit_header", font=("Courier", 11, "bold"), foreground="blue")
+    text_widget.tag_config("header", font=("Courier", 10, "bold"))
     text_widget.tag_config("separator", foreground="gray")
     
     # Make read-only
