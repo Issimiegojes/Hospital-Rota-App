@@ -10,6 +10,7 @@ import openpyxl # Allows to use .xlsx files
 from selection_popups import prefer_count, cannot_count, prefer_unit_count, manual_count # bring popup_select_shifts functions from a another file
 from solver import solve_rota # bring PuLP solver from another file
 from date_settings import save_year_confirm, save_month_confirm, save_holidays_confirm
+import threading
 
 # --------------------------------------------------------------------
 # App plan:
@@ -1324,6 +1325,37 @@ def extract_unit_from_shift_name(shift_name):
 # PuLP Solve: solver is in separate file
 # ----------------------------------------------------------------------------
 
+def set_solving_state(is_solving):
+    """
+    Disable or enable buttons while the solver is running.
+    is_solving=True  → grey everything out (solver started)
+    is_solving=False → restore everything (solver finished)
+    
+    WHY THIS APPROACH?
+    The alternative would be using locks (threading.Lock) to protect
+    shared data — but that's complex and can cause the GUI to freeze
+    if a locked thread stalls. Disabling buttons is simpler and
+    communicates clearly to the user what's happening.
+    """
+    # NORMAL state when not solving, DISABLED state when solving
+    state = DISABLED if is_solving else NORMAL
+
+    # Buttons that read or write shared data (shifts_list, workers_list etc.)
+    buttons_to_control = [
+        create_rota_button,     # Can't start a second solve
+        add_worker_button,      # Can't add workers mid-solve
+    ]
+    for button in buttons_to_control:
+        button.config(state=state)
+
+    # Also disable all Save, Delete, Cannot, Prefer etc. buttons
+    # on every worker row — these all touch workers_list
+    for row_widgets in worker_rows:
+        for key, widget in row_widgets.items():
+            if key != 'row_num':
+                widget.config(state=state)
+
+
 def create_rota():
     """
     This is the NEW create_rota function in main.py.
@@ -1344,6 +1376,9 @@ def create_rota():
         return  # make_shifts() already showed the error message
     
     assign_all_manual_shifts()  # Lock in manual assignments before solver runs
+
+    # LOCK everything down immediately
+    set_solving_state(True)
     # ========================================================================
     # PART A: Gather all the settings into a dictionary
     # ========================================================================
@@ -1359,131 +1394,167 @@ def create_rota():
         "enforce_no_adj_days": enforce_no_adj_days,
         "points_preferred_unit": points_preferred_unit                        
     }
-    
-    # ========================================================================
-    # PART B: Call the solver
-    # ========================================================================
-    # This is where the magic happens!
-    # We send our data to solver.py and get the results back
-    
-    # The imported create_rota function from solver.py
-    assignments, summary = solve_rota(shifts_list, workers_list, units_list, settings)
-    
-    # ========================================================================
-    # PART C: Update the shifts_list with the new assignments
-    # ========================================================================
-    # The solver returns a dictionary like {"Day 1": "John", "Night 1": "Sarah"}
-    # We need to update our shifts_list to match
-    
-    # for shift in shifts_list:                                     IF THIS IS TURNED ON, then if trying to run create_rota again will run on full rota, even if changed parameters.
-    # shift["assigned_worker"] = assignments.get(shift["name"])     IF THIS IS TURNED OFF, only the manually assigned workers stay assigned, the rest are left unassigned and can run create_rota again, with possibly new results
-    
-    # ========================================================================
-    # PART D: Print results to console (for debugging)
-    # ========================================================================
-    print("Final Rota:")
-    for shift_name, worker in assignments.items():
-        print(f"{shift_name}: {worker if worker else 'Unassigned'}")
-    
-    # ========================================================================
-    # PART E: Check if solver failed
-    # ========================================================================
-    if summary["status"] == "Infeasible":
-        error_label.config(text="ERROR: Impossible to create rota with current rules! Check shift ranges, max weekends, max 24hr shifts.")
-        return  # Stop here - don't show popup
-    
-    if summary["status"] == "Nothing to assign":
-        error_label.config(text="No empty shifts or no workers – nothing to assign.")
-        return  # Stop here
-    
-    # ========================================================================
-    # PART F: Create popup window to show results
-    # ========================================================================
-    popup = Toplevel(root)
-    popup.title("Rota Results")
-    
-    # Create a Text widget (like a mini text editor)
-    text_widget = Text(popup, wrap="none", width=60, height=30, font=("Courier", 10))
-    text_widget.pack(side="left", fill="both", expand=True)
-    
-    # Create scrollbar
-    scrollbar = Scrollbar(popup, orient="vertical", command=text_widget.yview)
-    scrollbar.pack(side="right", fill="y")
-    text_widget.config(yscrollcommand=scrollbar.set)
-    
-    # Mouse wheel scrolling
-    def on_popup_mousewheel(event):
-        text_widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
-    
-    popup.bind("<MouseWheel>", on_popup_mousewheel)
-    text_widget.bind("<MouseWheel>", on_popup_mousewheel)
-    
-    # Add title
-    text_widget.insert("end", "Final Rota (Multi-Unit)\n", "title")
-    text_widget.insert("end", "=" * 70 + "\n\n", "separator")
-    
-    # Group assignments by unit
-    assignments_by_unit = {}
-    for shift_name, worker in assignments.items():
-        if worker is None:
-            worker = "Unassigned"
-        
-        # Extract unit from shift name
-        unit = extract_unit_from_shift_name(shift_name)
-        
-        if unit not in assignments_by_unit:
-            assignments_by_unit[unit] = {}
-        
-        # Extract day number and type
-        day = extract_day_from_shift_name(shift_name)
-        shift_type = shift_name.split()[0]  # "Day" or "Night"
-        
-        if day not in assignments_by_unit[unit]:
-            assignments_by_unit[unit][day] = {"Day": "No shift", "Night": "No shift"}
-        
-        assignments_by_unit[unit][day][shift_type] = worker
-    
-    # Display results grouped by unit
-    for unit in sorted(assignments_by_unit.keys()):
-        text_widget.insert("end", f"=== {unit} ===\n", "unit_header")
+    # -------------------------------------------------------
+    # PART 1: The animated dots
+    # -------------------------------------------------------
+    # This list holds one item: the current dot count (0, 1, 2, or 3)
+    # We use a list instead of a plain variable because of how Python
+    # handles variables inside nested functions.
+    #
+    # WHY A LIST? If we wrote: dot_count = 0, then tried to do
+    # dot_count += 1 inside animate(), Python would complain
+    # "dot_count not defined" — because inner functions can READ
+    # outer variables but can't REASSIGN them (without 'nonlocal').
+    # A list gets around this: we never reassign dot_count itself,
+    # we just change what's inside it: dot_count[0] += 1
+    dot_count = [0]
+
+    def animate():
+        # dot_count[0] cycles: 0 → 1 → 2 → 3 → 0 → 1 → ...
+        dot_count[0] = (dot_count[0] + 1) % 4  # % 4 means "wrap back to 0 after 3"
+        dots = "." * dot_count[0]               # 0 dots, 1 dot, 2 dots, or 3 dots
+        error_label.config(text=f"Solving rota{dots}")
+
+        # root.after(milliseconds, function) is Tkinter's way of saying
+        # "call this function again after X milliseconds — but only if
+        # the solver is still running"
+        # We store the "job ID" so we can cancel it later
+        if not solver_done[0]:  # solver_done is explained below
+            animate_job[0] = root.after(500, animate)  # 500ms = half a second
+
+    # -------------------------------------------------------
+    # PART 2: Flags to track if the solver has finished
+    # -------------------------------------------------------
+    # Same list trick as above — used to communicate between threads
+    solver_done = [False]    # Becomes True when solver finishes
+    animate_job = [None]     # Stores the root.after job ID so we can cancel it
+    result_holder = [None]   # Will store (assignments, summary) when done
+
+    # -------------------------------------------------------
+    # PART 3: The solver function that runs in the background
+    # -------------------------------------------------------
+    def run_solver():
+        # This whole function runs on a SEPARATE thread
+        # so Tkinter stays free to animate
+        assignments, summary = solve_rota(shifts_list, workers_list, units_list, settings)
+        result_holder[0] = (assignments, summary)  # Save the results
+        solver_done[0] = True                       # Signal that we're done
+
+        # root.after(0, ...) means "run this on the main thread as soon as possible"
+        # We MUST do GUI updates on the main thread — doing them from a background
+        # thread can crash Tkinter unpredictably
+        root.after(0, on_solver_finished)
+
+    # -------------------------------------------------------
+    # PART 4: What happens when the solver finishes
+    # -------------------------------------------------------
+    def on_solver_finished():
+        # Cancel any pending animation call
+        if animate_job[0] is not None:
+            root.after_cancel(animate_job[0])
+
+        # RE-ENABLE everything now that solving is done
+        set_solving_state(False)
+
+        # Unpack the results
+        assignments, summary = result_holder[0]
+
+        # Everything below is exactly your original create_rota code
+        # — just moved here so it runs after the solver is done
+
+        print("Final Rota:")
+        for shift_name, worker in assignments.items():
+            print(f"{shift_name}: {worker if worker else 'Unassigned'}")
+
+        if summary["status"] == "Infeasible":
+            error_label.config(text="ERROR: Impossible to create rota with current rules! Check shift ranges, max weekends, max 24hr shifts.")
+            return
+
+        if summary["status"] == "Nothing to assign":
+            error_label.config(text="No empty shifts or no workers — nothing to assign.")
+            return
+
+        popup = Toplevel(root)
+        popup.title("Rota Results")
+
+        text_widget = Text(popup, wrap="none", width=60, height=30)
+        text_widget.pack(side="left", fill="both", expand=True)
+
+        scrollbar = Scrollbar(popup, orient="vertical", command=text_widget.yview)
+        scrollbar.pack(side="right", fill="y")
+        text_widget.config(yscrollcommand=scrollbar.set)
+
+        def on_popup_mousewheel(event):
+            text_widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        popup.bind("<MouseWheel>", on_popup_mousewheel)
+        text_widget.bind("<MouseWheel>", on_popup_mousewheel)
+
+        text_widget.insert("end", "Final Rota (Multi-Unit)\n", "title")
+        text_widget.insert("end", "=" * 70 + "\n\n", "separator")
+
+        assignments_by_unit = {}
+        for shift_name, worker in assignments.items():
+            if worker is None:
+                worker = "Unassigned"
+            unit = extract_unit_from_shift_name(shift_name)
+            if unit not in assignments_by_unit:
+                assignments_by_unit[unit] = {}
+            day = extract_day_from_shift_name(shift_name)
+            shift_type = shift_name.split()[0]
+            if day not in assignments_by_unit[unit]:
+                assignments_by_unit[unit][day] = {"Day": "No shift", "Night": "No shift"}
+            assignments_by_unit[unit][day][shift_type] = worker
+
+        for unit in sorted(assignments_by_unit.keys()):
+            text_widget.insert("end", f"=== {unit} ===\n", "unit_header")
+            text_widget.insert("end", "-" * 70 + "\n", "separator")
+            text_widget.insert("end", f"{'Day':<7}{'Day Shift':<30}{'Night Shift':<30}\n", "header")
+            text_widget.insert("end", "-" * 70 + "\n", "separator")
+            for day in sorted(assignments_by_unit[unit].keys()):
+                day_worker = assignments_by_unit[unit][day].get("Day", "No shift")
+                night_worker = assignments_by_unit[unit][day].get("Night", "No shift")
+                text_widget.insert("end", f"{day:<7}{day_worker:<30}{night_worker:<30}\n")
+            text_widget.insert("end", "\n")
+
+        text_widget.insert("end", "=" * 70 + "\n", "separator")
+        text_widget.insert("end", "Summary:\n", "title")
         text_widget.insert("end", "-" * 70 + "\n", "separator")
-        text_widget.insert("end", f"{'Day':<7}{'Day Shift':<30}{'Night Shift':<30}\n", "header")
-        text_widget.insert("end", "-" * 70 + "\n", "separator")
-        
-        for day in sorted(assignments_by_unit[unit].keys()):
-            day_worker = assignments_by_unit[unit][day].get("Day", "No shift")
-            night_worker = assignments_by_unit[unit][day].get("Night", "No shift")
-            
-            text_widget.insert("end", f"{day:<7}{day_worker:<30}{night_worker:<30}\n")
-        
-        text_widget.insert("end", "\n")
-    
-    # Add summary section
-    text_widget.insert("end", "=" * 70 + "\n", "separator")
-    text_widget.insert("end", "Summary:\n", "title")
-    text_widget.insert("end", "-" * 70 + "\n", "separator")
-    text_widget.insert("end", f"Number of preferred shifts assigned: {summary['preferences_count']}\n")
-    text_widget.insert("end", f"Number of 24-hour shifts: {summary['twenty_four_count']}\n")
-    text_widget.insert("end", f"Number of bad spacing pairs (<{spacing_days_threshold} days apart): {summary['bad_spacing_count']}\n")
-    
-    # Style the text
-    text_widget.tag_config("title", font=("Courier", 12, "bold"))
-    text_widget.tag_config("unit_header", font=("Courier", 11, "bold"), foreground="blue")
-    text_widget.tag_config("header", font=("Courier", 10, "bold"))
-    text_widget.tag_config("separator", foreground="gray")
-    
-    # Make read-only
-    text_widget.config(state="disabled")
+        text_widget.insert("end", f"Number of preferred shifts assigned: {summary['preferences_count']}\n")
+        text_widget.insert("end", f"Number of 24-hour shifts: {summary['twenty_four_count']}\n")
+        text_widget.insert("end", f"Number of bad spacing pairs (<{spacing_days_threshold} days apart): {summary['bad_spacing_count']}\n")
+
+        text_widget.tag_config("title", font=("Arial", 12, "bold"))
+        text_widget.tag_config("unit_header", font=("Arial", 11, "bold"), foreground="blue")
+        text_widget.tag_config("header", font=("Arial", 10, "bold"))
+        text_widget.tag_config("separator", foreground="gray")
+
+        text_widget.config(state="disabled")
+        error_label.config(text="Rota finished! See the popup window for results.")
+
+    # -------------------------------------------------------
+    # PART 5: Kick everything off
+    # -------------------------------------------------------
+    # Start the animation immediately
+    animate()
+
+    # Start the solver on a background thread
+    # daemon=True means: if the user closes the window,
+    # don't let this thread keep Python alive in the background
+    solver_thread = threading.Thread(target=run_solver, daemon=True)
+    solver_thread.start()
 
 # ---------------------------------------------------------------
 # Small code area mainly for buttons and error sign at the bottom
 # ---------------------------------------------------------------
 
 # Add worker button.
-Button(add_worker_button_frame, text="Add Worker", command=add_worker_row, width=10, pady=2).pack() 
+add_worker_button = Button(add_worker_button_frame, text="Add Worker", command=add_worker_row, width=10, pady=2)
+add_worker_button.pack()
 
 # Create rota button.
-Button(root, text="Create Rota", command=create_rota).pack(pady=4)  # Button to create a rota.
+create_rota_button = Button(root, text="Create Rota", command=create_rota)
+create_rota_button.pack(pady=4)
 
 # Frame for settings, saving and loading buttons.
 settings_frame = Frame(root)
