@@ -136,22 +136,37 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
     # ========================================================================
     # Build spacing pairs (shifts too close together)
     # ========================================================================
-    all_shift_names = sorted([shift["name"] for shift in shifts_list], 
-                            key=lambda s: parse_shift_name(s)[1])  # Sort by day number
-    
+
+    # Only use empty shifts - no point tracking spacing for already-assigned shifts
+    # Sort them by day number so we can use the early-exit trick below
+    empty_shifts_sorted = sorted(
+        empty_shifts,
+        key=lambda s: parse_shift_name(s)[1]  # Sort by day number
+    )
+
     bad_spacing_pairs = []
-    for i in range(len(all_shift_names)):
-        for j in range(i+1, len(all_shift_names)):
-            shift1 = all_shift_names[i]
-            shift2 = all_shift_names[j]
-            
-            _, day1, _ = parse_shift_name(shift1)
+
+    for i in range(len(empty_shifts_sorted)):
+        shift1 = empty_shifts_sorted[i]
+        _, day1, _ = parse_shift_name(shift1)
+
+        for j in range(i + 1, len(empty_shifts_sorted)):
+            shift2 = empty_shifts_sorted[j]
             _, day2, _ = parse_shift_name(shift2)
-            
-            # If shifts are too close together AND both are empty
-            if day2 - day1 < spacing_days_threshold:
-                if shift1 in empty_shifts and shift2 in empty_shifts:
-                    bad_spacing_pairs.append((shift1, shift2))
+
+            # KEY CHANGE: since the list is sorted by day, once the gap is
+            # big enough, ALL remaining shifts will also be too far away.
+            # So we can stop the inner loop early with 'break'.
+            #
+            # Old code: checked every remaining shift even after gap was too big
+            # New code: stops as soon as it sees the first shift that's far enough
+            if day2 - day1 >= spacing_days_threshold:
+                break  # No point checking further - everything after is even further away
+
+            # If we get here, the two shifts ARE too close together
+            bad_spacing_pairs.append((shift1, shift2))
+
+    print(f"Spacing pairs found: {len(bad_spacing_pairs)}")
     
     # ============================================================================
     # STEP 7: Extract worker preferences and limits
@@ -207,22 +222,66 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
     prob = pulp.LpProblem("Rota_Assignment_MultiUnit", pulp.LpMaximize)
     
     # ============================================================================
-    # STEP 10: Create decision variables
+    # STEP 10: Create decision variables  (PRUNED VERSION)
     # ============================================================================
-    assign_vars = pulp.LpVariable.dicts("Assign", 
-                                       (workers, empty_shifts), 
-                                       0, 1, 
-                                       pulp.LpBinary)
-    
+
+    # First, figure out which (worker, shift) pairs are IMPOSSIBLE before even
+    # creating variables. This is like crossing names off a list before the
+    # solver even starts thinking.
+
+    # We use a set for worker_cannot lookups because checking "x in a set" is
+    # much faster than "x in a list" - a set works like an index, a list has to
+    # check every single item one by one.
+    worker_cannot_set = {}
+    for w in workers:
+        worker_cannot_set[w] = set(worker_cannot[w])  # Convert list → set for speed
+
+    # Now build assign_vars manually instead of using pulp.LpVariable.dicts()
+    # assign_vars[worker][shift] will be either:
+    #   - A real PuLP variable (if the pairing is POSSIBLE)
+    #   - The number 0             (if the pairing is IMPOSSIBLE)
+    #
+    # Why store 0 instead of just skipping it?
+    # Because all the code below uses assign_vars[w][shift] everywhere.
+    # If we just skipped impossible pairs, those lines would crash with a KeyError.
+    # Storing 0 means "this is always 0" and PuLP handles it fine in equations.
+
+    assign_vars = {}
+    variables_created = 0   # Just for the print at the end
+    variables_skipped = 0   # Just for the print at the end
+
+    for w in workers:
+        assign_vars[w] = {}  # Create an empty sub-dictionary for this worker
+        for shift in empty_shifts:
+            
+            # Check if this pairing is impossible
+            if shift in worker_cannot_set[w]:
+                # PRUNED: worker cannot do this shift - store 0, don't create variable
+                assign_vars[w][shift] = 0
+                variables_skipped += 1
+            else:
+                # POSSIBLE: create a real binary variable (0 or 1)
+                # The name is just a label PuLP uses internally for reporting
+                assign_vars[w][shift] = pulp.LpVariable(
+                    f"Assign_{w}_{shift}",  # Unique name for this variable
+                    0, 1,                   # Min value 0, max value 1
+                    pulp.LpBinary           # Must be whole number (0 or 1, not 0.7)
+                )
+                variables_created += 1
+
+    print(f"Variables created: {variables_created} | Variables pruned (skipped): {variables_skipped}")
+    print(f"Reduction: {round(variables_skipped / (variables_created + variables_skipped) * 100)}% fewer variables")
+
+    # twenty_four_vars and spacing_var stay the same - they're already small
     twenty_four_vars = pulp.LpVariable.dicts("24hr", 
                                             (workers, twenty_four_hour_shift_pairs), 
                                             0, 1, 
                                             pulp.LpBinary)
-    
+
     spacing_var = pulp.LpVariable.dicts("SpacingBad", 
-                                       (workers, bad_spacing_pairs), 
-                                       0, 1, 
-                                       pulp.LpBinary)
+                                    (workers, bad_spacing_pairs), 
+                                    0, 1, 
+                                    pulp.LpBinary)
     
     # ============================================================================
     # STEP 11: Define the objective function
@@ -336,6 +395,80 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
             if forbidden_shift in empty_shifts:
                 prob += assign_vars[w][forbidden_shift] <= 0
     
+    # CONSTRAINT 12: Manually assigned shifts and constraints.
+    # Respect adjacency rules between manually assigned shifts and empty shifts.
+    # Respect Max 24hr preferences between manually assigned shifts and empty shifts.
+    #
+    # The solver only knows about empty shifts - it can't see manually assigned
+    # ones when building pairs. So we need to add per-worker constraints manually.
+    #
+    # For each worker, we look at what they're already assigned, then forbid
+    # any empty shift that would violate adjacency rules with those assignments.
+
+    # First build a lookup: {worker_name: [list of their pre-assigned shift dicts]}
+    pre_assigned = {w: [] for w in workers}
+    for shift in shifts_list:
+        if shift["assigned_worker"] in pre_assigned:
+            pre_assigned[shift["assigned_worker"]].append(shift)
+
+    for w in workers:
+        for pre_shift in pre_assigned[w]:
+            pre_type, pre_day, _ = parse_shift_name(pre_shift["name"])
+
+            for empty_shift in empty_shifts:
+                emp_type, emp_day, _ = parse_shift_name(empty_shift)
+
+                # Night → Day: pre-assigned Night X, empty Day X+1
+                if pre_type == "Night" and emp_type == "Day" and emp_day == pre_day + 1:
+                    prob += assign_vars[w][empty_shift] <= 0
+
+                # Day → Night (reverse): pre-assigned Day X+1, empty Night X
+                # This handles the case where manual shift is AFTER the empty shift
+                if emp_type == "Night" and pre_type == "Day" and pre_day == emp_day + 1:
+                    prob += assign_vars[w][empty_shift] <= 0
+
+                # Night → Night: pre-assigned Night X, empty Night X+1 (or reverse)
+                if enforce_no_adj_nights and pre_type == "Night" and emp_type == "Night":
+                    if emp_day == pre_day + 1 or emp_day == pre_day - 1:
+                        prob += assign_vars[w][empty_shift] <= 0
+
+                # Day → Day: pre-assigned Day X, empty Day X+1 (or reverse)
+                if enforce_no_adj_days and pre_type == "Day" and emp_type == "Day":
+                    if emp_day == pre_day + 1 or emp_day == pre_day - 1:
+                        prob += assign_vars[w][empty_shift] <= 0
+
+    for w in workers:
+        for pre_shift in pre_assigned[w]:
+            pre_type, pre_day, pre_unit = parse_shift_name(pre_shift["name"])
+
+            for empty_shift in empty_shifts:
+                emp_type, emp_day, emp_unit = parse_shift_name(empty_shift)
+
+                # Night → Day
+                if pre_type == "Night" and emp_type == "Day" and emp_day == pre_day + 1:
+                    prob += assign_vars[w][empty_shift] <= 0
+
+                # Day → Night (reverse)
+                if emp_type == "Night" and pre_type == "Day" and pre_day == emp_day + 1:
+                    prob += assign_vars[w][empty_shift] <= 0
+
+                # Night → Night
+                if enforce_no_adj_nights and pre_type == "Night" and emp_type == "Night":
+                    if emp_day == pre_day + 1 or emp_day == pre_day - 1:
+                        prob += assign_vars[w][empty_shift] <= 0
+
+                # Day → Day
+                if enforce_no_adj_days and pre_type == "Day" and emp_type == "Day":
+                    if emp_day == pre_day + 1 or emp_day == pre_day - 1:
+                        prob += assign_vars[w][empty_shift] <= 0
+
+                # 24hr block: if worker has max_24hr = 0 and a manually assigned
+                # shift on the same day and same unit, block the other half.
+                # Same day + same unit + different type = would form a 24hr shift.
+                if max_24hr[w] == 0 and emp_day == pre_day and emp_unit == pre_unit:
+                    if {emp_type, pre_type} == {"Day", "Night"}:
+                        prob += assign_vars[w][empty_shift] <= 0
+    
     # ============================================================================
     # STEP 13: Solve the problem
     # ============================================================================
@@ -391,7 +524,10 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
     # ============================================================================
     for w in workers:
         for shift in empty_shifts:
-            if assign_vars[w][shift].value() == 1:
+            var = assign_vars[w][shift]
+            # Check if it's a real PuLP variable (not a pruned 0)
+            # isinstance() asks: "is var a PuLP variable type?"
+            if isinstance(var, pulp.LpVariable) and var.value() == 1:
                 assignments[shift] = w
     
     print("Assignments done!")
