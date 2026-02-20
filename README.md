@@ -5,16 +5,18 @@ Python desktop app for scheduling 12-hour hospital shifts (day/night) with hard 
 ## Features
 - Select any month/year
 - Mark public holidays
+- Add units (can receive multiple units: "Cardiology", "Internal Medicine")
 - Add workers with:
   - Shift range (e.g. 2-4)
   - Cannot-work shifts
   - Preferred shifts
+  - Preferred units
   - Max weekends
   - Max 24-hour (day+night same day) shifts
 - Manual shift assignment
 - Hard rules (no night → day, no adjacent nights/days)
 - Soft rules + point system (PuLP)
-- Save/Load entire rota configuration
+- Save/Load entire rota configuration, including loading from a pre-defined .xlsx file
 
 ## Screenshots
 
