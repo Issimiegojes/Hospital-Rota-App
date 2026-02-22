@@ -1,3 +1,4 @@
+
 from tkinter import *
 
 def prefer_count(prefer_popup_inputs):
@@ -18,12 +19,12 @@ def prefer_count(prefer_popup_inputs):
     scrollbar = Scrollbar(popup, orient="vertical", command=canvas.yview)
     scrollable_frame = Frame(canvas)
 
-    scrollable_frame.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    scrollable_frame.bind(  # .bind(event,function) This is needed, because when popup appears, it is empty, and only later gets populated by checklist
+        "<Configure>", # Event of a widget changing its size
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all")) # canvas.configure(scrollregion= means "this is your scroll area. bbox=BindingBox, calculates total dimensions of everything inside canvas. 
     )
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw") # The Canvas normally displays drawings — shapes, lines, images. To put a regular tkinter widget (like a Frame) inside a canvas, you use create_window() — it embeds the widget as if it were a drawn object.
+    canvas.configure(yscrollcommand=scrollbar.set)  # Canvas tells scrollbar where it is, if scrolled with mousewheel for example
 
     canvas.pack(side="left", fill="both", expand=True)
     scrollbar.pack(side="right", fill="y")
@@ -64,7 +65,7 @@ def prefer_count(prefer_popup_inputs):
         check_vars.append((f"Night {day}", night_var))
         night_shift_vars.append(night_var)  # Add to night shift list
     
-    # Pre-select (this line was crashing)
+    # Pre-select
     existing_selections = selected_prefer_days.get(row_num, [])
     for shift_name, var in check_vars:
         if shift_name in existing_selections:
