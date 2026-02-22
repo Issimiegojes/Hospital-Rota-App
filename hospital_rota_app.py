@@ -4,13 +4,14 @@ import time # Used to show how much time it takes to solve the rota
 import calendar  # Bring in the calendar toolbox for month days.
 import os # Bring in interaction with Windows/Apple/Linux
 import json # Bring in functionality of saving/loading javascript object notation - data-interchange format
-from tkinter import *  # Bring in the Tkinter toolbox for the window (GUI).
-from tkinter import filedialog
+from tkinter import *  # Bring in the Tkinter toolbox for the window (GUI). Does not import modules within Tkinter, only functions like Button, Label etc. From ... import syntax brings brings namespace to THIS current namespace
+from tkinter import filedialog # A module (.py file) within tkinter, so it has to be imported separately
 import openpyxl # Allows to use .xlsx files
 from selection_popups import prefer_count, cannot_count, prefer_unit_count, manual_count # bring popup_select_shifts functions from a another file
 from solver import solve_rota # bring PuLP solver from another file
 from date_settings import save_year_confirm, save_month_confirm, save_holidays_confirm
-import threading
+import threading # Allows to run the Tkinter GUI while solving rota (the solving part runs separate)
+import psutil      # Lets us find child processes by parent. Later the subprocesses can be killed, important to shut down cbc.exe midway.
 
 # --------------------------------------------------------------------
 # App plan:
@@ -71,7 +72,7 @@ year_entry.pack(side=LEFT)  # Next to label.
 
 # Function for save year (like button press).
 def save_year():
-    global year
+    global year, month, num_days, starting_weekday, days_list
 
     save_year_inputs = {
         "give_year_entry": year_entry,
@@ -83,6 +84,16 @@ def save_year():
     result = save_year_confirm(save_year_inputs)
     if result is not None:
         year = result
+        # Reset month data — it was calculated for the old year
+        if month is not None:
+            month = None
+            num_days = None
+            starting_weekday = None
+            days_list.clear()
+            holiday_days.clear()
+            current_month_label.config(text="Current Month: None")
+            holidays_label.config(text="Holiday List: None")
+            error_label.config(text="Year changed, so month and holidays have been reset!")
 
 # Button inside frame.
 Button(year_frame, text="Save", command=save_year).pack(side=LEFT)  # Button next.
@@ -101,6 +112,10 @@ month_entry.pack(side=LEFT)
 def save_month():
     global year, month, num_days, starting_weekday, days_list
 
+    if workers_list:
+        error_label.config(text="Error: Cannot change months after workers have been added. Remove all workers first.")
+        return  
+
     save_month_inputs = {
         "give_month_entry": month_entry,
         "give_error_label": error_label,
@@ -109,8 +124,14 @@ def save_month():
         "give_year": year,
     }
 
-    month, num_days, starting_weekday, days_list = save_month_confirm(save_month_inputs)
-
+    # Handles None safely, for example if year was not set, the function would return None, but this code would try to unpack the tuple (month, num_days etc.), but it can't because it's None!
+    result = save_month_confirm(save_month_inputs)
+    if result is not None:
+        month, num_days, starting_weekday, days_list = result
+        if holiday_days:
+            holiday_days.clear()
+            holidays_label.config(text="Holiday List: None")
+            error_label.config(text="Month changed, so holidays were reset!")
 
 Button(month_frame, text="Save", command=save_month).pack(side=LEFT)  # Button, click runs save_month.
 
@@ -137,8 +158,10 @@ def save_holidays():  # Function for the button.
         "give_error_label": error_label,
     }
 
-    holiday_days = save_holidays_confirm(save_holidays_inputs)
-
+    result = save_holidays_confirm(save_holidays_inputs)
+    if result is not None:
+        holiday_days = result
+    
 Button(holiday_frame, text="Save", command=save_holidays).pack(side=LEFT)  # Button, click runs save_holidays.
 
 holidays_label = Label(holiday_frame, text="Holiday List: None")
@@ -154,15 +177,15 @@ units_entry.pack(side=LEFT)
 
 def save_units():
     global units_list
-    units_input = units_entry.get().strip()
-    if units_input == "":
-        units_list = []
-        current_units_label.config(text="Current Units: None")
-        error_label.config(text="")
+
+    if workers_list:
+        error_label.config(text="Error: Cannot change units after workers have been added. Remove all workers first.")
         return
-    
+
+    units_input = units_entry.get().strip()
+
     # Split by comma and clean up whitespace
-    units_list = [u.strip() for u in units_input.split(",") if u.strip()]
+    units_list = [u.strip() for u in units_input.split(",") if u.strip()] # give me u.strip(), for each u in the split list, but only if u.strip() is not empty".
     
     if not units_list:
         current_units_label.config(text="Current Units: None")
@@ -313,9 +336,9 @@ worker_canvas.bind("<Configure>", update_inner_width)  # Run this when canvas si
 
 worker_inner_frame.bind("<Configure>", update_scroll_region)  # Run this function when inner frame changes size
 
-def make_shifts():  # New function for making shifts list.
-    global shifts_list, holiday_days, include_weekday_days, units_list  # Use the shifts_list box outside.
-
+def make_shifts():  # Function for making shifts list.
+  
+    # Check if year AND month are defined
     if year == None or month == None:
         error_label.config(text="Erorr: Please select year and month first!")
         return
@@ -325,9 +348,8 @@ def make_shifts():  # New function for making shifts list.
         error_label.config(text="Error: Please define units first!")
         return
 
-    shifts_list = []  # Empty list for shifts.
+    shifts_list.clear()  # Empty list for shifts.
     shift_types = ["Day", "Night"]  # Group of types.
-    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]  # Group of day names.
     
     # Loop through each unit
     for unit in units_list:
@@ -1436,15 +1458,27 @@ def create_rota():
     def run_solver():
         # This whole function runs on a SEPARATE thread
         # so Tkinter stays free to animate
-        assignments, summary = solve_rota(shifts_list, workers_list, units_list, settings)
-        result_holder[0] = (assignments, summary)  # Save the results
-        solver_done[0] = True                       # Signal that we're done
+        try:
+            assignments, summary = solve_rota(shifts_list, workers_list, units_list, settings)
+            result_holder[0] = (assignments, summary)
+            solver_done[0] = True
+            root.after(0, on_solver_finished)
 
-        # root.after(0, ...) means "run this on the main thread as soon as possible"
-        # We MUST do GUI updates on the main thread — doing them from a background
-        # thread can crash Tkinter unpredictably
-        root.after(0, on_solver_finished)
-
+        except Exception as e:
+            # This runs if CBC was killed mid-solve (e.g. user closed the window)
+            # or if any other unexpected error occurred in the solver
+            #
+            # WHY CHECK winfo_exists()?
+            # If the window is already destroyed (user closed it), trying to
+            # update the label would cause a second crash. So we check first.
+            solver_done[0] = True  # Stop the animation either way
+            if root.winfo_exists():
+                def show_error():
+                    set_solving_state(False)
+                    if animate_job[0] is not None:
+                        root.after_cancel(animate_job[0])
+                    error_label.config(text=f"Solver stopped: {str(e)}")
+                root.after(0, show_error)
     # -------------------------------------------------------
     # PART 4: What happens when the solver finishes
     # -------------------------------------------------------
@@ -1477,7 +1511,7 @@ def create_rota():
         popup = Toplevel(root)
         popup.title("Rota Results")
 
-        text_widget = Text(popup, wrap="none", width=60, height=30)
+        text_widget = Text(popup, wrap="none", width=60, height=30, font=("Courier", 10))
         text_widget.pack(side="left", fill="both", expand=True)
 
         scrollbar = Scrollbar(popup, orient="vertical", command=text_widget.yview)
@@ -1523,10 +1557,11 @@ def create_rota():
         text_widget.insert("end", f"Number of preferred shifts assigned: {summary['preferences_count']}\n")
         text_widget.insert("end", f"Number of 24-hour shifts: {summary['twenty_four_count']}\n")
         text_widget.insert("end", f"Number of bad spacing pairs (<{spacing_days_threshold} days apart): {summary['bad_spacing_count']}\n")
+        text_widget.insert("end", f"Number of shifts in non-preferred units (workers with preference only): {summary['non_preferred_unit_count']}\n")
 
-        text_widget.tag_config("title", font=("Arial", 12, "bold"))
-        text_widget.tag_config("unit_header", font=("Arial", 11, "bold"), foreground="blue")
-        text_widget.tag_config("header", font=("Arial", 10, "bold"))
+        text_widget.tag_config("title", font=("Courier", 12, "bold"))
+        text_widget.tag_config("unit_header", font=("Courier", 11, "bold"), foreground="blue")
+        text_widget.tag_config("header", font=("Courier", 10, "bold"))
         text_widget.tag_config("separator", foreground="gray")
 
         text_widget.config(state="disabled")
@@ -1568,5 +1603,40 @@ Button(settings_frame, text="Load .xlsx", width=14, command=load_xlsx_preference
 # Error label (same).
 error_label = Label(root, text="")  # For errors.
 error_label.pack()
+
+def on_closing():
+    """
+    This runs when the user clicks the X to close the window.
+    
+    WHY NEEDED?
+    CBC runs as a child OS process. When Python exits normally,
+    child processes are NOT automatically killed - they keep running.
+    We need to manually find and kill them.
+    
+    psutil lets us find all child processes of our own Python process
+    and kill them before we exit.
+    """
+    try:
+        # Get our own process
+        current_process = psutil.Process(os.getpid())
+        
+        # Find all child processes (like cbc.exe) spawned by us
+        children = current_process.children(recursive=True)
+        
+        for child in children:
+            try:
+                print(f"Killing child process: {child.name()} (PID {child.pid})")
+                child.kill()  # Force kill - no waiting
+            except psutil.NoSuchProcess:
+                pass  # Already dead - that's fine
+                
+    except Exception as e:
+        print(f"Cleanup error: {e}")
+    
+    root.destroy()  # Now close the window
+
+# Tell Tkinter to run on_closing instead of just closing
+# WM_DELETE_WINDOW is the event that fires when user clicks X
+root.protocol("WM_DELETE_WINDOW", on_closing)
 
 root.mainloop()  # Start the window – like "go!"
