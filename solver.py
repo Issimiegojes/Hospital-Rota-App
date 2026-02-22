@@ -542,6 +542,7 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
     preferences_count = 0
     twenty_four_count = 0
     bad_spacing_count = 0
+    non_preferred_unit_count = 0  # How many shifts landed in a unit the worker did NOT want
     
     # Count preferred shifts
     for shift, worker in assignments.items():
@@ -549,6 +550,32 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
             continue
         if shift in worker_prefers[worker]:
             preferences_count += 1
+
+    # Count shifts assigned to non-preferred units.
+    #
+    # WHY THIS APPROACH?
+    # We loop through every final assignment (shift → worker pair).
+    # For each one, we ask three questions in order:
+    #   1. Was this shift actually assigned? (worker is not None)
+    #   2. Does this worker even have unit preferences? (if not, skip — no preference = no penalty)
+    #   3. Is the shift's unit NOT in their preferred list? (if so, count it)
+    #
+    # parse_shift_name() already exists and gives us the unit for free,
+    # so we reuse it rather than writing new parsing code.
+    #
+    # WHY .get() with a default?
+    # worker_preferred_units is a dictionary. If somehow a worker name
+    # isn't in it (e.g. a manually-assigned shift), .get(worker, []) 
+    # returns an empty list instead of crashing with a KeyError.
+    for shift, worker in assignments.items():
+        if worker is None:
+            continue                                           # Skip unassigned shifts
+        preferred_units = worker_preferred_units.get(worker, [])
+        if not preferred_units:
+            continue                                           # Worker has no unit preference — skip
+        _, _, unit = parse_shift_name(shift)                  # Get the unit from the shift name
+        if unit not in preferred_units:
+            non_preferred_unit_count += 1                     # Unit was NOT in their preferred list
     
     # Group shifts by worker
     worker_shifts = {}
@@ -585,7 +612,8 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
     print("Number of preferred shifts assigned:", preferences_count)
     print("Number of 24-hour shifts:", twenty_four_count)
     print(f"Number of bad spacing pairs (<{spacing_days_threshold} days apart):", bad_spacing_count)
-    
+    print("Number of shifts in non-preferred units (workers with preference only):", non_preferred_unit_count)
+
     # ============================================================================
     # STEP 18: Return results
     # ============================================================================
@@ -593,6 +621,7 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
         "preferences_count": preferences_count,
         "twenty_four_count": twenty_four_count,
         "bad_spacing_count": bad_spacing_count,
+        "non_preferred_unit_count": non_preferred_unit_count,
         "status": pulp.LpStatus[status],
         "total_points": total_points
     }
