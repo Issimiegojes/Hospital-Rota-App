@@ -386,9 +386,34 @@ def make_shifts():  # Function for making shifts list.
 #shifts_label.pack()  # Put on window.
 
 # Frame for workers – like a big shelf for the table.
-workers_frame = Frame(worker_inner_frame)  # NEW: Pack to inner_frame
+workers_frame = Frame(worker_inner_frame)  # Pack to inner_frame
 workers_frame.pack(fill="x")  # Fill horizontal, stack vertical
 
+'''
+The layout of all worker containers:
+
+worker_container        → positions canvas + scrollbar side by side (pack LEFT / RIGHT)
+  └── worker_canvas     → provides the scrollable viewport
+        └── worker_inner_frame  → the actual scrollable surface (grows as rows are added)
+              └── workers_frame → owns the grid layout (headers + data rows)
+
+The first three layers are the standard Tkinter scrollable area pattern — you need all three
+because a Canvas can't directly manage a grid of widgets; you embed a Frame inside it as a workaround.
+
+Why workers_frame as a 4th layer?
+It's because worker_inner_frame and workers_frame use different layout managers:
+- worker_inner_frame uses pack — it stacks things vertically as rows are added
+- workers_frame uses grid — it arranges the header labels and data cells in columns
+You cannot mix pack and grid in the same parent widget. 
+
+In other words:
+worker_inner_frame uses pack to arrange its children → workers_frame is packed into it ✓
+workers_frame uses grid to arrange its own children → all the labels and entries are gridded into it ✓
+
+So workers_frame exists purely to isolate the grid layout in its own container, 
+keeping pack and grid separated into different parent widgets              
+'''
+              
 # Configure columns to have fixed width of 50
 for col in range(10):
     workers_frame.columnconfigure(col, minsize=10, weight=0)
@@ -408,6 +433,9 @@ Label(workers_frame, text="Delete", width=10, padx=2, pady=2).grid(row=0, column
 # List to hold worker rows (for delete).
 worker_rows = []  # Empty list to store widget references for each row.
 worker_row_number = 1  # Start row 1 (after 0 headers)
+
+# The worker_row_number is never reset to 1 when deleting worker rows
+# because it serves as a unique ID and a key in dictionaries like selected_cannot_days etc.
 
 def add_worker_row():  # Function for "Add Worker" button.
     global worker_row_number, workers_list
@@ -478,15 +506,35 @@ def add_worker_row():  # Function for "Add Worker" button.
     }
     worker_rows.append(row_widgets)
     print(f"Current row: {worker_row_number}") #Debugging
-    worker_row_number += 1  # Add 1.
+    worker_row_number += 1  # Add 1. 
+    
+    def save_worker(row_num):
+        """
+        Validates and saves (or updates) a worker from the GUI row identified by row_num.
 
-    def save_worker(row_num):  # The function – the "recipe" for saving a worker.
-        # This runs when you click "Save Worker".
-        # Get what you typed from the boxes.
+        Reads input from the Entry widgets captured in the enclosing add_worker_row() scope.
+        Validates that name is not blank, shift range is in "min-max" format with valid numbers,
+        and that max_weekends / max_24hr are non-negative integers (default 100 if left blank).
+        Also reads cannot_work days, preferred days, and preferred units from their global dicts.
+
+        If validation passes:
+        - If a worker with this row_num already exists in workers_list, updates their data.
+        - Otherwise, creates a new worker dict and appends it to workers_list.
+
+        Args:
+            row_num (int): The unique ID of this worker row, used as a key in all
+                        per-row dictionaries (selected_cannot_days, etc.).
+        """
+
         name = name_entry.get().strip() # Get the name
         range_input = range_entry.get().strip()  # Get shift range.
         max_weekends_input = max_weekends_entry.get().strip()  # Get max weekends.
         max_24hr_input = max_24hr_entry.get().strip()  # Get max 24-hour.
+        
+        # Cannot work and other from selected days.
+        cannot_work = selected_cannot_days.get(row_num, [])  # Get the list for this row_num.
+        prefer = selected_prefer_days.get(row_num, [])  # Get the list for this row_num.
+        prefer_units = selected_units.get(row_num, []) # Get the list for this row_num for prefer_units
 
         # Check if name is not blank.
         if name == "":  # If empty.
@@ -510,12 +558,6 @@ def add_worker_row():  # Function for "Add Worker" button.
         except ValueError:
             error_label.config(text="Error: Range not numbers.")  # Error.
             return
-
-        # Cannot work from selected days.
-        global selected_cannot_days
-        cannot_work = selected_cannot_days.get(row_num, [])  # Get the list for this row_num.
-        prefer = selected_prefer_days.get(row_num, [])  # Get the list for this row_num.
-        prefer_units = selected_units.get(row_num, []) # Get the list for this row_num for prefer_units
 
         # Max weekends and 24hr – numbers.
         max_weekends = 100  # Default 100.
@@ -579,6 +621,16 @@ def add_worker_row():  # Function for "Add Worker" button.
         print("Your full worker list:")
         for worker in workers_list:
             print(f"Name: {worker['name']}, shifts: {worker['shifts_to_fill']}, Cannot: {worker['cannot_work']}, Prefers: {worker['prefers']}, Max weekends: {worker['max_weekends']}, Max 24hr: {worker['max_24hr']}, Prefers units: {worker['prefer_units']} Row number: {worker['worker_row_number']}")
+
+        '''
+        Note on dictionaries: both worker_dict and separate selected_cannot_days + other dictionaries store similar data.
+        The solver (solver.py) reads cannot_work, prefers, and prefer_units directly from the worker dict in workers_list. It never touches selected_cannot_days, selected_prefer_days, or selected_units at all.
+        So these three fields must be stored in the worker dict — the solver depends on them being there. Without them, the solver would have no cannot/prefer information and the rota would be generated ignoring all those preferences.
+        selected_manual_days works differently because manual shifts are pre-assigned to shifts_list before the solver even runs (via assign_all_manual_shifts() on line 1442), so the solver never needs to look them up from the worker dict.
+        In summary:
+        cannot_work, prefers, prefer_units → must be in the worker dict (solver reads them)
+        manual days → don't need to be in the worker dict (handled before the solver runs)
+        '''
 
     def save_manual(row_num):
         # Get worker name
@@ -655,7 +707,7 @@ def assign_all_manual_shifts():
         # .get() returns [] as default if row_num not found - avoids a crash
         manual_shifts = selected_manual_days.get(row_num, [])
         
-        for shift_name in manual_shifts:
+        for shift_name in manual_shifts: # For example Day 2 Cardiology from Manual shifts ["Day 2 Cardiology", "Night 3 Internal Medicine"]
             # Search through shifts_list to find the matching shift
             for shift in shifts_list:
                 if shift["name"] == shift_name:
@@ -701,6 +753,12 @@ def delete_row(row_num):
             # Remove from worker_rows list
             worker_rows.remove(row_widgets)
             break
+        '''
+        The loop iterates over every key/value pair and destroys each one. The two conditions:
+        key != 'row_num' — skips the 'row_num' entry because it's a plain integer, not a widget. Calling .destroy() on an integer would crash.
+        widget.winfo_exists() — checks the widget still exists in Tkinter before destroying it. This guards against a case where a widget may have already been destroyed (e.g. if its parent was destroyed first, children go with it).
+        So together the two checks ensure: only destroy things that are actual live widgets.
+        '''
 
     # Remove the worker from workers_list if it exists
     workers_list = [worker for worker in workers_list if worker.get("worker_row_number") != row_num]
