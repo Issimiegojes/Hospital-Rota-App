@@ -14,6 +14,7 @@ from pulp_settings import pulp_settings
 from save_load import save_preferences as save_preferences_file, load_preferences as load_preferences_file, load_xlsx_preferences as load_xlsx_preferences_file
 import threading # Allows to run the Tkinter GUI while solving rota (the solving part runs separate)
 import psutil      # Lets us find child processes by parent. Later the subprocesses can be killed, important to shut down cbc.exe midway.
+import subprocess # When closing main app, closes all children windows (like CBC.exe or Windows console)
 
 # --------------------------------------------------------------------
 # App plan:
@@ -59,14 +60,17 @@ root = Tk()  # Make the window box.
 #root.geometry("975x450")  # Set predetermined window size (width x height)
 root.title("Hospital Shift Manager 'Riaukapp'")  # Name on top.
 
-# Label inside frame.
-Label(root, text="Enter the year (e.g., 2026):").pack()  # Text, side=LEFT for horizontal.
+# LabelFrame groups year, month, holidays under one visible "Date Settings" border
+date_frame = LabelFrame(root, text="Date Settings", padx=6, pady=4)
+date_frame.pack(padx=8, pady=(8, 2), fill="x", anchor="w")
+
+Label(date_frame, text="Year (e.g., 2026):").pack(anchor="w")
 
 # Frame for year row – like a shelf for horizontal.
-year_frame = Frame(root)  # Make small box (Frame) inside root.
-year_frame.pack()  # Put the shelf on the window.
+year_frame = Frame(date_frame)  # Parent is now date_frame, not root
+year_frame.pack(anchor="w")
 
-Label(root, text="Enter the month (1-12, e.g., 1 for January):").pack()  # Text label.
+Label(date_frame, text="Month (1-12, e.g., 1 for January):").pack(anchor="w")
 
 # Type box inside frame.
 year_entry = Entry(year_frame)  # Type box in frame.
@@ -104,8 +108,8 @@ Button(year_frame, text="Save", command=save_year).pack(side=LEFT)  # Button nex
 current_year_label = Label(year_frame, text="Current Year: None")  # Show label.
 current_year_label.pack(side=LEFT)
 
-month_frame = Frame(root)
-month_frame.pack()
+month_frame = Frame(date_frame)  # Parent is date_frame, not root
+month_frame.pack(anchor="w")
 
 # Label and type box for month.
 month_entry = Entry(month_frame)  # Type box.
@@ -140,10 +144,10 @@ Button(month_frame, text="Save", command=save_month).pack(side=LEFT)  # Button, 
 current_month_label = Label(month_frame, text="Current Month: None")
 current_month_label.pack(side=LEFT)
 
-Label(root, text="Enter public holiday days, separated by comma (e.g., 24,25,26) or leave blank:").pack()  # Text label.
+Label(date_frame, text="Public holidays, comma-separated (e.g., 24,25,26) or leave blank:").pack(anchor="w")
 
-holiday_frame = Frame(root)
-holiday_frame.pack()
+holiday_frame = Frame(date_frame)  # Parent is date_frame, not root
+holiday_frame.pack(anchor="w")
 
 # Label and type box for holidays.
 holiday_entry = Entry(holiday_frame)  # Type box.
@@ -169,13 +173,19 @@ Button(holiday_frame, text="Save", command=save_holidays).pack(side=LEFT)  # But
 holidays_label = Label(holiday_frame, text="Holiday List: None")
 holidays_label.pack(side=RIGHT)
 
-Label(root, text="Units (comma-separated, e.g. Internal Medicine,Cardiology):").pack()
+# Separate LabelFrame for Units, with groove relief
+units_lf = LabelFrame(root, text="Units", relief="groove", padx=6, pady=4)
+units_lf.pack(padx=8, pady=(0, 4), fill="x", anchor="w")
 
-units_frame = Frame(root)
-units_frame.pack()
+Label(units_lf, text="Comma-separated (e.g. Internal Medicine,Cardiology):").pack(anchor="w")
+
+units_frame = Frame(units_lf)  # Parent is units_lf, not root
+units_frame.pack(anchor="w")
 
 units_entry = Entry(units_frame, width=40)
 units_entry.pack(side=LEFT)
+
+
 
 def save_units():
     global units_list
@@ -283,8 +293,8 @@ def show_manual_popup(row_num):
     
     manual_count(manual_popup_inputs)
 
-add_worker_button_frame = Frame(root)
-add_worker_button_frame.pack()
+
+
 
 # Button to add row.
 
@@ -1152,13 +1162,15 @@ def create_rota():
 # Small code area mainly for buttons and error sign at the bottom
 # ---------------------------------------------------------------
 
-# Add worker button.
-add_worker_button = Button(add_worker_button_frame, text="Add Worker", command=add_worker_row, width=10, pady=2)
-add_worker_button.pack()
+# Shared frame so both buttons sit side by side
+action_frame = Frame(root)
+action_frame.pack(pady=4)
 
-# Create rota button.
-create_rota_button = Button(root, text="Create Rota", command=create_rota)
-create_rota_button.pack(pady=4)
+add_worker_button = Button(action_frame, text="➕ Add Worker", command=add_worker_row, width=12)
+add_worker_button.pack(side=LEFT, padx=4)
+
+create_rota_button = Button(action_frame, text="Create Rota ⭕", command=create_rota, width=12)
+create_rota_button.pack(side=LEFT, padx=4)
 
 # Frame for settings, saving and loading buttons.
 settings_frame = Frame(root)
@@ -1183,26 +1195,35 @@ def on_closing():
     We need to manually find and kill them.
     
     psutil lets us find all child processes of our own Python process
-    and kill them before we exit.
+    and kill them before we exit. Subprocess let's also kill the whole tree.
     """
     try:
-        # Get our own process
         current_process = psutil.Process(os.getpid())
-        
-        # Find all child processes (like cbc.exe) spawned by us
         children = current_process.children(recursive=True)
-        
+
         for child in children:
             try:
                 print(f"Killing child process: {child.name()} (PID {child.pid})")
-                child.kill()  # Force kill - no waiting
+
+                # /F = force kill, /T = kill the whole tree including conhost.exe
+                subprocess.call(
+                    ['taskkill', '/F', '/T', '/PID', str(child.pid)],
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+
             except psutil.NoSuchProcess:
-                pass  # Already dead - that's fine
-                
+                pass
+            except Exception:
+                # Fallback for macOS/Linux where taskkill doesn't exist
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
+
     except Exception as e:
         print(f"Cleanup error: {e}")
-    
-    root.destroy()  # Now close the window
+
+    root.destroy() # Now close the window
 
 # Tell Tkinter to run on_closing instead of just closing
 # WM_DELETE_WINDOW is the event that fires when user clicks X
