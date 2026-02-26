@@ -10,6 +10,8 @@ import openpyxl # Allows to use .xlsx files
 from selection_popups import prefer_count, cannot_count, prefer_unit_count, manual_count # bring popup_select_shifts functions from a another file
 from solver import solve_rota # bring PuLP solver from another file
 from date_settings import save_year_confirm, save_month_confirm, save_holidays_confirm
+from pulp_settings import pulp_settings
+from save_load import save_preferences as save_preferences_file, load_preferences as load_preferences_file, load_xlsx_preferences as load_xlsx_preferences_file
 import threading # Allows to run the Tkinter GUI while solving rota (the solving part runs separate)
 import psutil      # Lets us find child processes by parent. Later the subprocesses can be killed, important to shut down cbc.exe midway.
 
@@ -764,626 +766,135 @@ def delete_row(row_num):
     workers_list = [worker for worker in workers_list if worker.get("worker_row_number") != row_num]
     error_label.config(text=f"Worker '{worker_name}' deleted and all their shifts unassigned!")
 
-def pulp_settings():
-    popup = Toplevel(root)
-    popup.title("PuLP Settings")
+def open_pulp_settings():
+    """
+    Gathers current PuLP settings into a dict and opens the settings popup.
+    Updates global settings variables when the user saves.
+    """
 
-    Label(popup, text="Points for shifts filled:").grid(row=0, column=0, sticky="w")
-    filled_entry = Entry(popup)
-    filled_entry.insert(0, str(points_filled))
-    filled_entry.grid(row=0, column=1)
+    settings_inputs = {
+        "points_filled":          points_filled,
+        "points_preferred":       points_preferred,
+        "points_preferred_unit":  points_preferred_unit,
+        "points_spacing":         points_spacing,
+        "spacing_days_threshold": spacing_days_threshold,
+        "points_24hr":            points_24hr,
+        "enforce_no_adj_days":    enforce_no_adj_days,
+        "enforce_no_adj_nights":  enforce_no_adj_nights,
+        "include_weekday_days":   include_weekday_days,
+    }
 
-    Label(popup, text="Points for preferred shifts:").grid(row=1, column=0, sticky="w")
-    preferred_entry = Entry(popup)
-    preferred_entry.insert(0, str(points_preferred))
-    preferred_entry.grid(row=1, column=1)
+    def apply_new_settings(new_settings):
+        global points_filled, points_preferred, points_preferred_unit, points_spacing
+        global spacing_days_threshold, points_24hr, enforce_no_adj_days, enforce_no_adj_nights, include_weekday_days
+        points_filled          = new_settings["points_filled"]
+        points_preferred       = new_settings["points_preferred"]
+        points_preferred_unit  = new_settings["points_preferred_unit"]
+        points_spacing         = new_settings["points_spacing"]
+        spacing_days_threshold = new_settings["spacing_days_threshold"]
+        points_24hr            = new_settings["points_24hr"]
+        enforce_no_adj_days    = new_settings["enforce_no_adj_days"]
+        enforce_no_adj_nights  = new_settings["enforce_no_adj_nights"]
+        include_weekday_days   = new_settings["include_weekday_days"]
 
-    Label(popup, text="Points for preferred units:").grid(row=2, column=0, sticky="w")
-    preferred_unit_entry = Entry(popup)
-    preferred_unit_entry.insert(0, str(points_preferred_unit))
-    preferred_unit_entry.grid(row=2, column=1)
-
-    Label(popup, text="Points for bad spacing days:").grid(row=3, column=0, sticky="w")
-    spacing_entry = Entry(popup)
-    spacing_entry.insert(0, str(points_spacing))
-    spacing_entry.grid(row=3, column=1)
-
-    Label(popup, text="Days apart for spacing penalty:").grid(row=4, column=0, sticky="w")
-    spacing_days_entry = Entry(popup)
-    spacing_days_entry.insert(0, str(spacing_days_threshold))
-    spacing_days_entry.grid(row=4, column=1)
-
-    Label(popup, text="Points for 24-hour shifts:").grid(row=5, column=0, sticky="w")
-    hr24_entry = Entry(popup)
-    hr24_entry.insert(0, str(points_24hr))
-    hr24_entry.grid(row=5, column=1)
-
-    Label(popup, text="Enforce: No Day → Day").grid(row=6, column=0, sticky="w")
-    adj_days_var = IntVar(value=1 if enforce_no_adj_days else 0)
-    Checkbutton(popup, variable=adj_days_var).grid(row=6, column=1)
-
-    Label(popup, text="Enforce: No Night → Night").grid(row=7, column=0, sticky="w")
-    adj_nights_var = IntVar(value=1 if enforce_no_adj_nights else 0)
-    Checkbutton(popup, variable=adj_nights_var).grid(row=7, column=1)
-
-    Label(popup, text="Include Mon-Fri day shifts").grid(row=8, column=0, sticky="w")
-    include_weekday_var = IntVar(value=1 if include_weekday_days else 0)
-    Checkbutton(popup, variable=include_weekday_var).grid(row=8, column=1)
-
-    def save_settings():
-        global points_filled, points_preferred, points_preferred_unit, points_spacing, spacing_days_threshold, points_24hr
-        global enforce_no_adj_days, enforce_no_adj_nights, include_weekday_days
-        try:
-            points_filled = int(filled_entry.get())
-            points_preferred = int(preferred_entry.get())
-            points_preferred_unit = int(preferred_unit_entry.get())
-            points_spacing = int(spacing_entry.get())
-            spacing_days_threshold = int(spacing_days_entry.get())
-            points_24hr = int(hr24_entry.get())
-
-            enforce_no_adj_days   = bool(adj_days_var.get())
-            enforce_no_adj_nights = bool(adj_nights_var.get())
-            include_weekday_days  = bool(include_weekday_var.get())
-
-            error_label.config(text="PuLP settings updated successfully!")
-
-            popup.destroy()
-        except ValueError:
-            error_label.config(text="Error: All values must be integers.")
-
-    Button(popup, text="Save Settings", command=save_settings).grid(row=9, column=0, columnspan=2)
+    pulp_settings(root, settings_inputs, error_label, apply_new_settings)
 
 def save_preferences():
-    if year is None:
-        error_label.config(text="Year not set.")
-        return
-    file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
-    if file_path:
-        # Clean up the dictionaries before saving
-        # Get a set of row numbers that actually have saved workers
-        saved_row_numbers = set()  # Like a basket to collect valid table numbers
-        for worker in workers_list:  # Loop through all saved workers
-            saved_row_numbers.add(worker["worker_row_number"])  # Add their table number
-        
-        # Filter the dictionaries to only keep entries for saved workers
-        # This is like throwing away notes from empty tables
-        cleaned_cannot = {row_num: days for row_num, days in selected_cannot_days.items() if row_num in saved_row_numbers}
-        cleaned_prefer = {row_num: days for row_num, days in selected_prefer_days.items() if row_num in saved_row_numbers}
-        cleaned_selected_units = {row_num: days for row_num, days in selected_units.items() if row_num in saved_row_numbers}
-        cleaned_manual = {row_num: days for row_num, days in selected_manual_days.items() if row_num in saved_row_numbers}
-        
-        # Build the data to save (using cleaned versions)
-        data = {"year": year}
-        if month is not None:
-            data["month"] = month
-        data["holiday_days"] = holiday_days
-        data["shifts_list"] = shifts_list
-        data["workers_list"] = workers_list
-        data["selected_cannot_days"] = cleaned_cannot  # Use cleaned version
-        data["selected_prefer_days"] = cleaned_prefer  # Use cleaned version
-        data["selected_units"] = cleaned_selected_units
-        data["selected_manual_days"] = cleaned_manual  # Use cleaned version
-        data["units_list"] = units_list  # Save units_list
-        
-        with open(file_path, 'w') as f:
-            json.dump(data, f)
-        error_label.config(text="Preferences saved.")
+    
+    save_preferences_file(error_label, {
+        "year": year,
+        "month": month,
+        "units_list": units_list,
+        "workers_list": workers_list,
+        "holiday_days": holiday_days,
+        "shifts_list": shifts_list,
+        "selected_cannot_days": selected_cannot_days,
+        "selected_prefer_days": selected_prefer_days,
+        "selected_units": selected_units,
+        "selected_manual_days": selected_manual_days,
+    })
 
 def load_preferences():
-    global selected_cannot_days, selected_prefer_days, selected_manual_days, selected_units
-    file_path = filedialog.askopenfilename(filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
-    if file_path:
-        with open(file_path, 'r') as f:
-            data = json.load(f)
-        if "year" in data:
-            global year
-            year = data["year"]
-            current_year_label.config(text="Current Year: " + str(year))
-            year_entry.delete(0, END)
-            year_entry.insert(0, str(year))
-        if "month" in data:
-            global month
-            month = data["month"]
-            month_entry.delete(0, END)
-            month_entry.insert(0, str(month))
-            month_name_list = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
-            month_name = month_name_list[month-1]
-            current_month_label.config(text="Current Month: " + month_name)
-            # Since month is loaded, call save_month to set days_list etc.
-            save_month()
-        if "holiday_days" in data:
-            global holiday_days
-            holiday_days = data["holiday_days"]
-            holiday_entry.delete(0, END)
-            if holiday_days:
-                holiday_entry.insert(0, ", ".join(map(str, holiday_days)))
-                holidays_label.config(text="Holiday List: " + str(holiday_days))
-            else:
-                holidays_label.config(text="Holiday List: None")
-        if "units_list" in data:
-            global units_list
-            units_list = data["units_list"]
-            nice_units_text = ", ".join(units_list)
-            units_entry.delete(0, END)
-            if units_list:
-                units_entry.insert(0, nice_units_text)
-                current_units_label.config(text=f"Current Units: {', '.join(units_list)}")
-            else:
-                current_units_label.config(text="Current Units: None")
-        if "shifts_list" in data:
-            global shifts_list
-            shifts_list = data["shifts_list"]
-        if "workers_list" in data:
-            global workers_list
-            workers_list = data["workers_list"]
-            # Populate selected_cannot_days from workers_list if not in data
-            if "selected_cannot_days" not in data:
-                selected_cannot_days = {worker["worker_row_number"]: worker.get("cannot_work", []) for worker in workers_list}
-            # Clear existing worker rows
-            global worker_rows, worker_row_number
-            for row_widgets in worker_rows:
-                for key, widget in row_widgets.items():
-                    if key != 'row_num' and widget.winfo_exists():
-                        widget.destroy()
-            worker_rows = []
-            worker_row_number = 1
-            # Now add rows for loaded workers
-            for worker in workers_list:
-                row_num = worker["worker_row_number"]
-                worker_row_number = row_num
-                add_worker_row()
-            # Now populate the entries
-            for worker in workers_list:
-                row_num = worker["worker_row_number"]
-                for row_widgets in worker_rows:
-                    if row_widgets['row_num'] == row_num:
-                        row_widgets['name_entry'].delete(0, END)
-                        row_widgets['name_entry'].insert(0, worker["name"])
-                        row_widgets['range_entry'].delete(0, END)
-                        row_widgets['range_entry'].insert(0, f"{worker['shifts_to_fill'][0]}-{worker['shifts_to_fill'][1]}")
-                        row_widgets['max_weekends_entry'].delete(0, END)
-                        row_widgets['max_weekends_entry'].insert(0, str(worker["max_weekends"]))
-                        row_widgets['max_24hr_entry'].delete(0, END)
-                        row_widgets['max_24hr_entry'].insert(0, str(worker["max_24hr"]))
-                        break
-            # Update worker_row_number to max +1
-            if workers_list:
-                max_row = max(worker["worker_row_number"] for worker in workers_list)
-                worker_row_number = max_row + 1
-            else:
-                worker_row_number = 1
-        if "selected_cannot_days" in data:
-            selected_cannot_days = {int(k): v for k, v in data["selected_cannot_days"].items()}
-        if "selected_prefer_days" in data:
-            selected_prefer_days = {int(k): v for k, v in data["selected_prefer_days"].items()}
-        if "selected_units" in data:
-            selected_units = {int(k): v for k, v in data["selected_units"].items()}
-        if "selected_manual_days" in data:
-            selected_manual_days = {int(k): v for k, v in data["selected_manual_days"].items()}
-        # Set worker dicts from loaded selected dicts to ensure consistency
-        for worker in workers_list:
-            row_num = worker["worker_row_number"]
-            worker["cannot_work"] = selected_cannot_days.get(row_num, [])
-            worker["prefers"] = selected_prefer_days.get(row_num, [])
-            worker["prefer_units"] = selected_units.get(row_num, [])
-            if row_num not in selected_manual_days:
-                selected_manual_days[row_num] = []
-        error_label.config(text="Preferences loaded.")
-        # Update button texts to show selections
-        for row_widgets in worker_rows:
-            row_num = row_widgets['row_num']
-            num_cannot = len(selected_cannot_days.get(row_num, []))
-            row_widgets['cannot_button'].config(text=f"Select ({num_cannot})" if num_cannot > 0 else "Select")
-            num_prefer = len(selected_prefer_days.get(row_num, []))
-            row_widgets['prefer_button'].config(text=f"Select ({num_prefer})" if num_prefer > 0 else "Select")
-            num_prefer_unit = len(selected_units.get(row_num, []))
-            row_widgets['prefer_unit_button'].config(text=f"Select ({num_prefer_unit})" if num_prefer_unit > 0 else "Select")
-            num_manual = len(selected_manual_days.get(row_num, []))
-            row_widgets['manual_button'].config(text=f"Select ({num_manual})" if num_manual > 0 else "Select")
-    print(f"Debugging. Year: {year}, month {month}, Holiday list: {holiday_days}, Shift list length {len(shifts_list)}")
-    for worker in workers_list:
-        print(worker)
-    print(selected_cannot_days)
+    def set_worker_row_number(n):
+        global worker_row_number
+        worker_row_number = n
 
-def load_xlsx_preferences(): 
-    """
-    Load worker preferences from an Excel (.xlsx) file.
-    
-    Expected format:
-    - Row 1: Headers with "Name" in column A, day numbers (1, 2, 3...) in columns B onwards
-    - Row 2+: Worker names in column A, colored cells for preferences
-    - RED cells = Cannot work that day (both Day & Night shifts)
-    - GREEN cells = Prefer to work that day (both Day & Night shifts)
-    """
-    global workers_list, worker_rows, worker_row_number, units_list
-    global selected_cannot_days, selected_prefer_days, selected_manual_days
+    def set_year(y):
+        global year
+        year = y
 
-    # -------------------------------------------------------
-    # IMPORTANT: First check if days_list exists (year and month must be set)
-    try:
-        if not days_list:
-            error_label.config(text="Error: Please set year and month first!")
-            return
-    except NameError:
-        error_label.config(text="Error: Please set year and month first!")
-        return
+    def set_month(m):
+        global month
+        month = m
 
-    # Open file dialog
-    file_path = filedialog.askopenfilename(
-        filetypes=[("Excel files", "*.xlsx *.xlsm"), ("All files", "*.*")]
+    load_preferences_file(
+        widgets={
+            "error_label": error_label,
+            "current_year_label": current_year_label,
+            "year_entry": year_entry,
+            "month_entry": month_entry,
+            "current_month_label": current_month_label,
+            "holiday_entry": holiday_entry,
+            "holidays_label": holidays_label,
+            "units_entry": units_entry,
+            "current_units_label": current_units_label,
+        },
+        state={
+            "workers_list": workers_list,
+            "worker_rows": worker_rows,
+            "selected_cannot_days": selected_cannot_days,
+            "selected_prefer_days": selected_prefer_days,
+            "selected_units": selected_units,
+            "selected_manual_days": selected_manual_days,
+            "holiday_days": holiday_days,
+            "units_list": units_list,
+            "shifts_list": shifts_list,
+        },
+        callbacks={
+            "save_month": save_month,
+            "add_worker_row": add_worker_row,
+            "set_worker_row_number": set_worker_row_number,
+            "set_year": set_year,
+            "set_month": set_month,
+        }
     )
-    if not file_path:
-        return  # User clicked Cancel
 
-    try:
-        # data_only=False → keep formulas and formatting (needed to read cell colors)
-        # data_only=True would only give us the VALUES, losing all color information
-        wb = openpyxl.load_workbook(file_path, data_only=False)
-        
-        # Try to find a suitable sheet
-        sheet = None
-        
-        # If only one sheet, just use it
-        if len(wb.sheetnames) == 1:
-            sheet = wb[wb.sheetnames[0]]
-        else:
-            # Try to find sheet by name (supports multiple languages)
-            for sname in wb.sheetnames:
-                sname_lower = sname.lower()
-                if any(keyword in sname_lower for keyword in 
-                       ["feuille", "sheet", "preferences", "rota", "workers", "staff"]):
-                    sheet = wb[sname]
-                    break
-        
-        # Fallback: use active sheet
-        if sheet is None:
-            sheet = wb.active
 
-        # STEP: Read units from Row 1
-        # -------------------------------------------------------
-        # Scan every cell in Row 1 looking for one that starts with "Unit=["
-        # That cell contains our units list like: Unit=["Cardiology", "Internal Medicine"]
-        units_col_val = None
-        for col in range(1, sheet.max_column + 1):
-            cell_val = sheet.cell(row=1, column=col).value  # Read the cell
-            if cell_val and str(cell_val).strip().startswith("Units_list=["):
-                # Found it! Save the value and stop looking
-                units_col_val = str(cell_val).strip()
-                break
-
-        if units_col_val is None:
-            # Didn't find a Unit= cell — can't continue without knowing the units
-            error_label.config(text="Error: Could not find 'Units_list=[...]' in Row 1. Please add it to the xlsx.")
-            return
-        
-        # Equate prefer_unit_col to Units_list=[" for future saving preferred units to workers
-        prefer_unit_col = None   # Will store the column number
-
-        for col in range(1, sheet.max_column + 1):
-            cell_val = sheet.cell(row=1, column=col).value
-            if cell_val and str(cell_val).strip().startswith("Units_list=["):
-                units_col_val = str(cell_val).strip()
-                prefer_unit_col = col   # ← save it here, same column, same loop
-                break
-        
-        # prefer_unit_col being None is OK — not every xlsx needs to have this column
-        # We handle it gracefully below with a fallback to empty list
-
-        # Parse the list out of the string
-        # units_col_val is like: 'Unit=["Vidaus Endokrinologijos", "Vidaus Reumatologijos"]'
-        # Step 1: find the position of '[' — the start of the actual list
-        bracket_start = units_col_val.index('[')
-        # Step 2: slice from '[' to the end, giving us: '["Vidaus Endokrinologijos", ...]'
-        bracket_part = units_col_val[bracket_start:]
-        # Step 3: ast.literal_eval safely converts that string into a real Python list
-        # It's like telling Python "treat this text AS IF it were code defining a list"
-        # We use ast.literal_eval instead of eval() because eval() can run ANY code (dangerous),
-        # while ast.literal_eval only accepts safe data like strings, numbers, lists
-        import ast
-        loaded_units = ast.literal_eval(bracket_part)
-
-        # Update the global units_list and the GUI
-        units_list = loaded_units
-        units_entry.delete(0, END)                              # Clear the entry box
-        units_entry.insert(0, ", ".join(units_list))            # Fill it with the units text
-        current_units_label.config(text=f"Current Units: {', '.join(units_list)}")  # Update label
-        error_label.config(text=f"Units loaded: {', '.join(units_list)}")
-
-        # Find header row and the "Name" column
-        # HEADER_ROW stays 1 — that's where day numbers and units always live
-        HEADER_ROW = 1
-
-        # But "Name" might not be in Row 1 — scan column 1 to find it
-        name_col = 1        # "Name" is always in column 1
-        NAME_ROW = None     # We don't know which row yet
-
-        for row in range(1, sheet.max_row + 1):   # Scan downward through column 1
-            val = sheet.cell(row=row, column=1).value
-            if val and str(val).strip().lower() == "name":
-                NAME_ROW = row   # Found it — e.g. row 3
-                break
-
-        if NAME_ROW is None:
-            error_label.config(text="Error: Could not find 'Name' in column 1.")
-            return
-
-        # Worker data always starts on the row immediately below "Name"
-        FIRST_DATA_ROW = NAME_ROW + 1
-
-        # Find the Shift_range column by scanning Row 1, will be used later to fill shift ranges
-        shift_range_col = None
-        for col in range(1, sheet.max_column + 1):
-            val = sheet.cell(row=1, column=col).value
-            if val and str(val).strip().lower() == "shift_range":
-                shift_range_col = col
-                break
-
-        # Maps each column to its specific (day_number, shift_type) pair
-        # by reading Row 1 (day numbers) AND Row 2 (D or N labels) together
-        col_to_shift = {}   # {col_number: (day_number, "Day" or "Night")}
-        
-        current_day = None  # Tracks which day we're currently in
-                            # Needed because merged cells show None in the second column —
-                            # when Row 1 is None, the day is the same as the previous column
-        
-        SHIFT_TYPE_ROW = 2  # Row 2 contains "D" or "N" for each column
-        
-        # STEP — maps each column to its specific (day_number, shift_type) pair
-        # by reading Row 1 (day numbers) AND Row 2 (D or N labels) together
-        for col in range(1, sheet.max_column + 1):
-            day_val = sheet.cell(row=HEADER_ROW, column=col).value  # Row 1: day number or None
-            dn_val = sheet.cell(row=SHIFT_TYPE_ROW, column=col).value  # Row 2: "D" or "N" or None
-            
-            # If Row 1 has a number, update current_day
-            if day_val is not None:
-                try:
-                    current_day = int(float(day_val))  # e.g. 1.0 → 1
-                except (ValueError, TypeError):
-                    current_day = None  # Not a number (e.g. "Name", "Comments") — reset
-            
-            # Only process columns that have a valid day AND a D/N label
-            if current_day is None:
-                continue
-            if not (1 <= current_day <= len(days_list)):
-                continue
-            if dn_val not in ("D", "N"):
-                continue
-            
-            # Convert "D"/"N" to the full word used in shift names
-            shift_type = "Day" if dn_val == "D" else "Night"
-            
-            col_to_shift[col] = (current_day, shift_type)
-        
-        if not col_to_shift:
-            error_label.config(text="Error: Could not find D/N shift columns in Row 2.")
-            return
-        
-        # Clear old data completely
-        for row_widgets in worker_rows[:]:  # [:] creates a copy to avoid modification during iteration
-            for key, widget in row_widgets.items():
-                if key != 'row_num' and widget.winfo_exists():
-                    widget.destroy()  # Remove widget from GUI
-        
-        worker_rows.clear()
-        worker_row_number = 1
-        workers_list.clear()
-        selected_cannot_days.clear()
-        selected_prefer_days.clear()
-        selected_manual_days.clear()
-
-        loaded_count = 0
-        total_rows = sheet.max_row - FIRST_DATA_ROW + 1
-
-        # Loop through each worker row
-        for row_idx, r in enumerate(range(FIRST_DATA_ROW, sheet.max_row + 1), 1):
-            name_cell = sheet.cell(row=r, column=name_col)
-            name_val = name_cell.value
-            
-            # Skip empty rows
-            if not name_val:
-                continue
-            
-            name = str(name_val).strip()
-            
-            # Skip if empty after stripping, or if no letters (probably not a name)
-            if not name or not any(c.isalpha() for c in name):
-                continue
-
-            # Collect cannot/prefer days by checking cell colors
-            cannot_list = []
-            prefer_list = []
-
-            # Loop through each day that exists in this month
-            # Each column already knows its exact shift type:
-            for col, (day, shift_type) in col_to_shift.items():
-                cell = sheet.cell(row=r, column=col)
-                
-                if cell.fill and cell.fill.fill_type == 'solid':
-                    color = cell.fill.start_color.rgb
-                    if color is None:
-                        continue
-                    color_hex = color.upper()[-6:]
-                    
-                    if is_red_color(color_hex):
-                        cannot_list.append(f"{shift_type} {day}")  # Only THIS shift type
-                    elif is_green_color(color_hex):
-                        prefer_list.append(f"{shift_type} {day}") # Only THIS shift type
-
-            # Read preferred units for this worker
-            prefer_units = []  # Default: empty — no unit preference
-            
-            if prefer_unit_col is not None:
-                raw = sheet.cell(row=r, column=prefer_unit_col).value
-                
-                if raw is not None:
-                    # If Excel stored it as a float (e.g. 1.2), the comma became a dot
-                    # So split by "." for floats, "," for strings
-                    if isinstance(raw, float):
-                        raw_str = str(raw).strip()
-                        parts = raw_str.split(".")   # "1.2" → ["1", "2"]
-                    else:
-                        raw_str = str(raw).strip()
-                        parts = raw_str.split(",")   # "1,2" → ["1", "2"]
-                    
-                    for part in parts:
-                        try:
-                            # Convert "1" → 1, then subtract 1 because
-                            # workers write 1-based numbers but Python lists are 0-based
-                            # So "1" means units_list[0], "2" means units_list[1]
-                            index = int(float(part.strip())) - 1
-                            
-                            # Safety check: index must exist in units_list
-                            if 0 <= index < len(units_list):
-                                prefer_units.append(units_list[index])
-                        except (ValueError, TypeError):
-                            pass  # Not a number — skip silently
-
-            # Read shift range for this worker
-            min_shifts = 1   # Defaults if column missing or cell blank
-            max_shifts = 4
-
-            if shift_range_col is not None:
-                raw = sheet.cell(row=r, column=shift_range_col).value
-
-                if raw is not None:
-                    if isinstance(raw, float):
-                        raw_str = str(raw).strip()
-                        parts = raw_str.split(".")   # "1.2" → ["1", "2"]
-                    else:
-                        raw_str = str(raw).strip()
-                        parts = raw_str.split(",")   # "1,2" → ["1", "2"]
-
-                    if len(parts) == 2:
-                        try:
-                            min_shifts = int(parts[0])
-                            max_shifts = int(parts[1])
-                        except ValueError:
-                            pass  # Not valid numbers — keep defaults
-
-        # shift_range_col being None is fine — we fall back to default range
-            # Create the worker dictionary with default values
-            worker_dict = {
-                "name": name,
-                "shifts_to_fill": [min_shifts, max_shifts],  # Default: 0 min, 100 max
-                "cannot_work": cannot_list,
-                "prefers": prefer_list,
-                "prefer_units": prefer_units,
-                "max_weekends": 100,
-                "max_24hr": 100,
-                "worker_row_number": worker_row_number
-            }
-            workers_list.append(worker_dict)
-
-            # IMPORTANT: Save current row number BEFORE calling add_worker_row
-            current_row_num = worker_row_number
-            
-            # Create GUI row (this will increment worker_row_number internally)
-            add_worker_row()
-            
-            # CRITICAL FIX: Do NOT increment worker_row_number here!
-            # add_worker_row() already does it, so incrementing again causes double-increment bug
-            # REMOVED: worker_row_number += 1
-
-            # Fill in the values in the GUI
-            for row_widgets in worker_rows:
-                if row_widgets['row_num'] == current_row_num:
-                    # Fill name
-                    row_widgets['name_entry'].delete(0, END)
-                    row_widgets['name_entry'].insert(0, name)
-                    
-                    # Fill shift range (default 1-4)
-                    row_widgets['range_entry'].delete(0, END)
-                    row_widgets['range_entry'].insert(0, f"{min_shifts}-{max_shifts}")  # ← was "1-4"
-                    
-                    # Fill max weekends
-                    row_widgets['max_weekends_entry'].delete(0, END)
-                    row_widgets['max_weekends_entry'].insert(0, "100")
-                    
-                    # Fill max 24hr
-                    row_widgets['max_24hr_entry'].delete(0, END)
-                    row_widgets['max_24hr_entry'].insert(0, "100")
-
-                    # Update button labels to show selection counts
-                    num_cannot = len(cannot_list)
-                    num_prefer = len(prefer_list)
-                    num_prefer_unit = len(prefer_units)
-                    
-                    row_widgets['cannot_button'].config(
-                        text=f"Select ({num_cannot})" if num_cannot > 0 else "Select"
-                    )
-                    row_widgets['prefer_button'].config(
-                        text=f"Select ({num_prefer})" if num_prefer > 0 else "Select"
-                    )
-                    row_widgets['prefer_unit_button'].config(
-                        text=f"Select ({num_prefer_unit})" if num_prefer_unit > 0 else "Select"
-                    )
-                    row_widgets['manual_button'].config(text="Select")
-                    break
-
-            # Store selections for the popup windows
-            selected_cannot_days[current_row_num] = cannot_list
-            selected_prefer_days[current_row_num] = prefer_list
-            selected_units[current_row_num] = prefer_units
-            selected_manual_days[current_row_num] = []
-
-            loaded_count += 1
-            
-            # Show progress every 5 workers (helps with large files)
-            if loaded_count % 5 == 0 or row_idx == total_rows:
-                error_label.config(text=f"Loading... {loaded_count} worker(s)")
-                root.update()  # Force GUI to refresh
-
-        # Make shifts so after succesful loading ready to create rota
-        make_shifts()
-
-        # Final success message
-        error_label.config(text=f"✓ Loaded {loaded_count} worker(s) — red = cannot, green = prefer")
-
-    except Exception as e:
-        error_label.config(text=f"Error reading file: {str(e)}")
-        print("Detailed error:", e)  # Print to console for debugging
-
-# Helper functions for color detection
-def is_red_color(color_hex):
-    """
-    Check if a color hex code (RRGGBB) represents red.
-    Returns True for pure red and close variations.
+def load_xlsx_preferences():
+    if year is None or month is None:
+        error_label.config(text="Please set year and month before loading an xlsx file.")
+        return
     
-    Args:
-        color_hex: 6-character hex string like "FF0000"
-    
-    Returns:
-        bool: True if the color is red-ish
-    """
-    try:
-        r = int(color_hex[0:2], 16)
-        g = int(color_hex[2:4], 16)
-        b = int(color_hex[4:6], 16)
-        # Red if: red channel is the biggest AND clearly dominates green and blue
-        return r > g and r > b and r > 100
-    except (ValueError, IndexError):
-        return False
+    def set_worker_row_number(n):
+        global worker_row_number
+        worker_row_number = n
 
-
-def is_green_color(color_hex):
-    """
-    Check if a color hex code (RRGGBB) represents green.
-    Returns True for pure green and close variations.
-    
-    Args:
-        color_hex: 6-character hex string like "00FF00"
-    
-    Returns:
-        bool: True if the color is green-ish
-    """
-    try:
-        r = int(color_hex[0:2], 16)
-        g = int(color_hex[2:4], 16)
-        b = int(color_hex[4:6], 16)
-        # Green if: green channel is the biggest AND clearly dominates red and blue
-        return g > r and g > b and g > 100
-    except (ValueError, IndexError):
-        return False
+    result = load_xlsx_preferences_file(
+        widgets={
+            "error_label": error_label,
+            "units_entry": units_entry,
+            "current_units_label": current_units_label,
+            "root": root,
+        },
+        state={
+            "workers_list": workers_list,
+            "worker_rows": worker_rows,
+            "selected_cannot_days": selected_cannot_days,
+            "selected_prefer_days": selected_prefer_days,
+            "selected_manual_days": selected_manual_days,
+            "selected_units": selected_units,
+            "units_list": units_list,
+            "days_list": days_list,
+        },
+        callbacks={
+            "add_worker_row": add_worker_row,
+            "make_shifts": make_shifts,
+            "set_worker_row_number": set_worker_row_number,
+        }
+    )
+    if result:
+        global worker_row_number
+        worker_row_number = result["worker_row_number"]
 
 def extract_day_from_shift_name(shift_name):
     """
@@ -1653,7 +1164,7 @@ create_rota_button.pack(pady=4)
 settings_frame = Frame(root)
 settings_frame.pack()
 
-Button(settings_frame, text="PuLP Settings", width=14, command=pulp_settings).pack(side=LEFT, padx=4)
+Button(settings_frame, text="PuLP Settings", width=14, command=open_pulp_settings).pack(side=LEFT, padx=4)
 Button(settings_frame, text="Save Preferences", width=14, command=save_preferences).pack(side=LEFT, padx=4)
 Button(settings_frame, text="Load", width=14, command=load_preferences).pack(side=LEFT, padx=4)
 Button(settings_frame, text="Load .xlsx", width=14, command=load_xlsx_preferences).pack(side=LEFT, padx=4)
