@@ -60,9 +60,16 @@ root = Tk()  # Make the window box.
 #root.geometry("975x450")  # Set predetermined window size (width x height)
 root.title("Hospital Shift Manager 'Riaukapp'")  # Name on top.
 
+# Top frame designed for LabelFrame and Utilities frame
+top_frame = Frame(root)
+top_frame.pack(padx=8, pady=(8, 2), fill="x", anchor="w")
+
 # LabelFrame groups year, month, holidays under one visible "Date Settings" border
-date_frame = LabelFrame(root, text="Date Settings", padx=6, pady=4)
-date_frame.pack(padx=8, pady=(8, 2), fill="x", anchor="w")
+date_frame = LabelFrame(top_frame, text="Date Settings", padx=6, pady=4)
+date_frame.pack(side=LEFT, fill="both", expand=True, anchor="nw")
+
+utilities_lf = LabelFrame(top_frame, text="Utilities", padx=10, pady=10)
+utilities_lf.pack(side=LEFT, fill="both", expand=True, anchor="nw", padx=(8, 0))
 
 Label(date_frame, text="Year (e.g., 2026):").pack(anchor="w")
 
@@ -959,7 +966,7 @@ def set_solving_state(is_solving):
 
 def create_rota():
     """
-    This is the NEW create_rota function in main.py.
+    This is the create_rota function in main.py.
     It's much simpler - it just:
     1. Collects all the data from the GUI
     2. Packages it up
@@ -1106,18 +1113,29 @@ def create_rota():
         text_widget.insert("end", "Final Rota (Multi-Unit)\n", "title")
         text_widget.insert("end", "=" * 70 + "\n\n", "separator")
 
+        """
+        Below a dictionary is built for assignments_by_unit = {
+        "ICU": {
+            5:  {"Day": "Dr. Smith", "Night": "Dr. Jones"},
+            12: {"Day": "Unassigned", "Night": "Dr. Smith"},
+            ...},
+        "Internal Medicine": {
+            2: {"Day": "Bobby", "Night": "Dr. Brown"} 
+            ...},
+        }
+        """
         assignments_by_unit = {}
         for shift_name, worker in assignments.items():
             if worker is None:
-                worker = "Unassigned"
+                worker = "Unassigned" # Later "No shift" is overwritten -> to "Unassigned", but only if the solver did not find a worker. If the shift did not even exist, it remains as "No shift", which is written as default for every day (1, 2...) below.
             unit = extract_unit_from_shift_name(shift_name)
             if unit not in assignments_by_unit:
                 assignments_by_unit[unit] = {}
             day = extract_day_from_shift_name(shift_name)
             shift_type = shift_name.split()[0]
             if day not in assignments_by_unit[unit]:
-                assignments_by_unit[unit][day] = {"Day": "No shift", "Night": "No shift"}
-            assignments_by_unit[unit][day][shift_type] = worker
+                assignments_by_unit[unit][day] = {"Day": "No shift", "Night": "No shift"} # First builds a "No shift", so it can be filled by a worker later.
+            assignments_by_unit[unit][day][shift_type] = worker # Here "Unassigned" could overwrite "No shift", or a specific worker like "Dr. Brown" overwrites "No shift"
 
         for unit in sorted(assignments_by_unit.keys()):
             text_widget.insert("end", f"=== {unit} ===\n", "unit_header")
@@ -1172,14 +1190,10 @@ add_worker_button.pack(side=LEFT, padx=4)
 create_rota_button = Button(action_frame, text="Create Rota ⭕", command=create_rota, width=12)
 create_rota_button.pack(side=LEFT, padx=4)
 
-# Frame for settings, saving and loading buttons.
-settings_frame = Frame(root)
-settings_frame.pack()
-
-Button(settings_frame, text="PuLP Settings", width=14, command=open_pulp_settings).pack(side=LEFT, padx=4)
-Button(settings_frame, text="Save Preferences", width=14, command=save_preferences).pack(side=LEFT, padx=4)
-Button(settings_frame, text="Load", width=14, command=load_preferences).pack(side=LEFT, padx=4)
-Button(settings_frame, text="Load .xlsx", width=14, command=load_xlsx_preferences).pack(side=LEFT, padx=4)
+Button(utilities_lf, text="PuLP Settings",    width=16, command=open_pulp_settings).pack(pady=3)
+Button(utilities_lf, text="Save Preferences", width=16, command=save_preferences).pack(pady=3)
+Button(utilities_lf, text="Load",             width=16, command=load_preferences).pack(pady=3)
+Button(utilities_lf, text="Load .xlsx",       width=16, command=load_xlsx_preferences).pack(pady=3)
 
 # Error label (same).
 error_label = Label(root, text="")  # For errors.
