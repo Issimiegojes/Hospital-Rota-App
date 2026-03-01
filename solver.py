@@ -91,6 +91,20 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
             shifts_by_day[day] = []
         shifts_by_day[day].append((shift_name, shift_type, unit))
     
+    """
+    End result of shifts_by_day dictionary = {
+        1: [
+            ("Day 1 Cardiology", "Day", "Cardiology"),
+            ("Night 1 Cardiology", "Night", "Cardiology"),
+            ("Day 1 Internal Medicine", "Day", "Internal Medicine"),
+          ],
+        2: [
+            ("Day 2 Cardiology", "Day", "Cardiology"),
+            ("Night 2 Internal Medicine", "Night", "Internal Medicine"),
+          ], ...
+        }
+    """
+
     # ========================================================================
     # Process consecutive days for Night→Day, Night→Night, Day→Day
     # ========================================================================
@@ -342,7 +356,7 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
             for w in workers:
                 prob += assign_vars[w][current] + assign_vars[w][next_shift] <= 1
     
-    # CONSTRAINT 6: NEW - No two shifts on same day (except allowed 24hr)
+    # CONSTRAINT 6: No two shifts on same day (except allowed 24hr)
     # This prevents: "Day 5 Cardiology" + "Night 5 Internal Medicine"
     # But allows: "Day 5 Cardiology" + "Night 5 Cardiology" (handled separately)
     for pair in bad_same_day_non24hr_pairs:
