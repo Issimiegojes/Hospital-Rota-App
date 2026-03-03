@@ -1191,7 +1191,7 @@ create_rota_button = Button(action_frame, text="Create Rota ⭕", command=create
 create_rota_button.pack(side=LEFT, padx=4)
 
 Button(utilities_lf, text="PuLP Settings",    width=16, command=open_pulp_settings).pack(pady=3)
-Button(utilities_lf, text="Save Preferences", width=16, command=save_preferences).pack(pady=3)
+Button(utilities_lf, text="Save", width=16, command=save_preferences).pack(pady=3)
 Button(utilities_lf, text="Load",             width=16, command=load_preferences).pack(pady=3)
 Button(utilities_lf, text="Load .xlsx",       width=16, command=load_xlsx_preferences).pack(pady=3)
 
