@@ -8,6 +8,15 @@ This file solves the rota scheduling problem for multiple hospital units.
 import pulp
 import sys
 import os
+import subprocess
+
+# Hide CBC console window when running as a packaged .exe
+if hasattr(sys, '_MEIPASS') and sys.platform == 'win32':
+    _original_popen_init = subprocess.Popen.__init__
+    def _hidden_popen_init(self, *args, **kwargs):
+        kwargs['creationflags'] = kwargs.get('creationflags', 0) | 0x08000000
+        _original_popen_init(self, *args, **kwargs)
+    subprocess.Popen.__init__ = _hidden_popen_init
 
 def solve_rota(shifts_list, workers_list, units_list, settings):
     """
@@ -492,7 +501,9 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
     # Falls back to CBC if not .exe file:
     if hasattr(sys, '_MEIPASS'):
         cbc_path = os.path.join(sys._MEIPASS, 'cbc.exe')
-        status = prob.solve(pulp.COIN_CMD(msg=1, timeLimit=timeLimit_setting, path=cbc_path))
+        print(f"CBC path: {cbc_path}")
+        print(f"CBC exists: {os.path.exists(cbc_path)}") # Debugging: check if cbc solver when packaged found
+        status = prob.solve(pulp.COIN_CMD(msg=0, timeLimit=timeLimit_setting, path=cbc_path)) # msg=0, because there is no console used and msg=1 might cause lag
     else:
         status = prob.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=timeLimit_setting))
        # try: this part uses highspy/highsolver, but crashes on "Presolving model"

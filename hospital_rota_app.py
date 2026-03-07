@@ -192,8 +192,6 @@ units_frame.pack(anchor="w")
 units_entry = Entry(units_frame, width=40)
 units_entry.pack(side=LEFT)
 
-
-
 def save_units():
     global units_list
 
@@ -299,9 +297,6 @@ def show_manual_popup(row_num):
     }
     
     manual_count(manual_popup_inputs)
-
-
-
 
 # Button to add row.
 
@@ -929,6 +924,13 @@ def extract_unit_from_shift_name(shift_name):
     parts = shift_name.split()
     return " ".join(parts[2:])  # Everything after day number is the unit
 
+def format_elapsed_time(seconds):
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes > 0:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
 # ----------------------------------------------------------------------------
 # PuLP Solve: solver is in separate file
 # ----------------------------------------------------------------------------
@@ -1037,6 +1039,7 @@ def create_rota():
     solver_done = [False]    # Becomes True when solver finishes
     animate_job = [None]     # Stores the root.after job ID so we can cancel it
     result_holder = [None]   # Will store (assignments, summary) when done
+    start_time = [None]      # Will store when solving began
 
     # -------------------------------------------------------
     # PART 3: The solver function that runs in the background
@@ -1162,12 +1165,15 @@ def create_rota():
         text_widget.tag_config("separator", foreground="gray")
 
         text_widget.config(state="disabled")
-        error_label.config(text="Rota finished! See the popup window for results.")
+
+        elapsed = time.time() - start_time[0]
+        error_label.config(text=f"Rota finished in {format_elapsed_time(elapsed)}! See the popup window for results.")
 
     # -------------------------------------------------------
     # PART 5: Kick everything off
     # -------------------------------------------------------
     # Start the animation immediately
+    start_time[0] = time.time()  # Record the moment solving begins animate()
     animate()
 
     # Start the solver on a background thread

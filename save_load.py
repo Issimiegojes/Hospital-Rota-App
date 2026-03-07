@@ -138,6 +138,20 @@ def load_preferences(widgets, state, callbacks):
     with open(file_path, 'r') as f:
         data = json.load(f)
 
+    # Clear old workers BEFORE loading year/month ──────────────────
+    # If we don't do this, save_month()'s guard sees the old workers and
+    # returns early, leaving days_list stale for the rest of the load.
+    for row_widgets in worker_rows[:]:          # [:] copies list so we can modify safely
+        for key, widget in row_widgets.items():
+            if key != 'row_num' and widget.winfo_exists():
+                widget.destroy()
+    worker_rows.clear()
+    workers_list.clear()
+    selected_cannot_days.clear()
+    selected_prefer_days.clear()
+    selected_units.clear()
+    selected_manual_days.clear()
+
     if "year" in data:
         year = data["year"]
         set_year(year)                          # ← add this line
