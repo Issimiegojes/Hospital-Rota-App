@@ -21,6 +21,7 @@ def pulp_settings(root, settings_inputs, error_label, on_save):
     enforce_no_adj_days   = settings_inputs["enforce_no_adj_days"]
     enforce_no_adj_nights = settings_inputs["enforce_no_adj_nights"]
     include_weekday_days  = settings_inputs["include_weekday_days"]
+    time_limit            = settings_inputs["time_limit"]
     
     popup = Toplevel(root)
     popup.title("PuLP Settings")
@@ -55,17 +56,22 @@ def pulp_settings(root, settings_inputs, error_label, on_save):
     hr24_entry.insert(0, str(points_24hr))
     hr24_entry.grid(row=5, column=1)
 
-    Label(popup, text="Enforce: No Day → Day").grid(row=6, column=0, sticky="w")
+    Label(popup, text="Time limit (seconds):").grid(row=6, column=0, sticky="w")
+    time_limit_entry = Entry(popup)
+    time_limit_entry.insert(0, str(time_limit))
+    time_limit_entry.grid(row=6, column=1)
+
+    Label(popup, text="Enforce: No Day → Day").grid(row=7, column=0, sticky="w")
     adj_days_var = IntVar(value=1 if enforce_no_adj_days else 0)
-    Checkbutton(popup, variable=adj_days_var).grid(row=6, column=1)
+    Checkbutton(popup, variable=adj_days_var).grid(row=7, column=1)
 
-    Label(popup, text="Enforce: No Night → Night").grid(row=7, column=0, sticky="w")
+    Label(popup, text="Enforce: No Night → Night").grid(row=8, column=0, sticky="w")
     adj_nights_var = IntVar(value=1 if enforce_no_adj_nights else 0)
-    Checkbutton(popup, variable=adj_nights_var).grid(row=7, column=1)
+    Checkbutton(popup, variable=adj_nights_var).grid(row=8, column=1)
 
-    Label(popup, text="Include Mon-Fri day shifts").grid(row=8, column=0, sticky="w")
+    Label(popup, text="Include Mon-Fri day shifts").grid(row=9, column=0, sticky="w")
     include_weekday_var = IntVar(value=1 if include_weekday_days else 0)
-    Checkbutton(popup, variable=include_weekday_var).grid(row=8, column=1)
+    Checkbutton(popup, variable=include_weekday_var).grid(row=9, column=1)
 
     def save_settings():
         try:
@@ -79,6 +85,7 @@ def pulp_settings(root, settings_inputs, error_label, on_save):
                     "enforce_no_adj_days":    bool(adj_days_var.get()),
                     "enforce_no_adj_nights":  bool(adj_nights_var.get()),
                     "include_weekday_days":   bool(include_weekday_var.get()),
+                    "time_limit":             int(time_limit_entry.get()),
                 }
             on_save(new_settings)  # send values back to hospital_rota_app.py
             error_label.config(text="PuLP settings updated successfully!")
@@ -86,4 +93,4 @@ def pulp_settings(root, settings_inputs, error_label, on_save):
         except ValueError:
             error_label.config(text="Error: All values must be integers.")
 
-    Button(popup, text="Save Settings", command=save_settings).grid(row=9, column=0, columnspan=2)
+    Button(popup, text="Save Settings", command=save_settings).grid(row=10, column=0, columnspan=2)

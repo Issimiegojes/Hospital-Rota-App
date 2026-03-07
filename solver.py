@@ -495,7 +495,7 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
     # ============================================================================
     # STEP 13: Solve the problem
     # ============================================================================
-    timeLimit_setting = 6000
+    timeLimit_setting = settings.get("time_limit", 6000)
     print(f"Starting PuLP solve – time limit {timeLimit_setting} seconds...")
 
     # Falls back to CBC if not .exe file:

@@ -51,7 +51,7 @@ points_24hr = -3
 enforce_no_adj_nights = True   # Night → Night next day
 enforce_no_adj_days = True   # Day → Day next day hard rule
 include_weekday_days = False   # False = default behaviour (skip Mon-Fri day shifts when making shifts)
-
+time_limit = 6000
 # -------------------------------------------------------
 # The main window (like the car's dashboard).
 # -------------------------------------------------------
@@ -794,11 +794,12 @@ def open_pulp_settings():
         "enforce_no_adj_days":    enforce_no_adj_days,
         "enforce_no_adj_nights":  enforce_no_adj_nights,
         "include_weekday_days":   include_weekday_days,
+        "time_limit":             time_limit,
     }
 
     def apply_new_settings(new_settings):
         global points_filled, points_preferred, points_preferred_unit, points_spacing
-        global spacing_days_threshold, points_24hr, enforce_no_adj_days, enforce_no_adj_nights, include_weekday_days
+        global spacing_days_threshold, points_24hr, enforce_no_adj_days, enforce_no_adj_nights, include_weekday_days, time_limit
         points_filled          = new_settings["points_filled"]
         points_preferred       = new_settings["points_preferred"]
         points_preferred_unit  = new_settings["points_preferred_unit"]
@@ -808,6 +809,7 @@ def open_pulp_settings():
         enforce_no_adj_days    = new_settings["enforce_no_adj_days"]
         enforce_no_adj_nights  = new_settings["enforce_no_adj_nights"]
         include_weekday_days   = new_settings["include_weekday_days"]
+        time_limit             = new_settings["time_limit"]
 
     pulp_settings(root, settings_inputs, error_label, apply_new_settings)
 
@@ -1002,7 +1004,8 @@ def create_rota():
         "points_24hr": points_24hr,
         "enforce_no_adj_nights": enforce_no_adj_nights,
         "enforce_no_adj_days": enforce_no_adj_days,
-        "points_preferred_unit": points_preferred_unit                        
+        "points_preferred_unit": points_preferred_unit,
+        "time_limit": time_limit,                        
     }
     # -------------------------------------------------------
     # PART 1: The animated dots
