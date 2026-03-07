@@ -495,8 +495,8 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
     # ============================================================================
     # STEP 13: Solve the problem
     # ============================================================================
-    print("Starting PuLP solve – time limit 6000 seconds...")
     timeLimit_setting = 6000
+    print(f"Starting PuLP solve – time limit {timeLimit_setting} seconds...")
 
     # Falls back to CBC if not .exe file:
     if hasattr(sys, '_MEIPASS'):
@@ -552,7 +552,7 @@ def solve_rota(shifts_list, workers_list, units_list, settings):
             var = assign_vars[w][shift]
             # Check if it's a real PuLP variable (not a pruned 0)
             # isinstance() asks: "is var a PuLP variable type?"
-            if isinstance(var, pulp.LpVariable) and var.value() == 1:
+            if isinstance(var, pulp.LpVariable) and var.value() is not None and var.value() >= 0.5:
                 assignments[shift] = w
     
     print("Assignments done!")
