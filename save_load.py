@@ -138,20 +138,6 @@ def load_preferences(widgets, state, callbacks):
     with open(file_path, 'r') as f:
         data = json.load(f)
 
-    # Clear old workers BEFORE loading year/month ──────────────────
-    # If we don't do this, save_month()'s guard sees the old workers and
-    # returns early, leaving days_list stale for the rest of the load.
-    for row_widgets in worker_rows[:]:          # [:] copies list so we can modify safely
-        for key, widget in row_widgets.items():
-            if key != 'row_num' and widget.winfo_exists():
-                widget.destroy()
-    worker_rows.clear()
-    workers_list.clear()
-    selected_cannot_days.clear()
-    selected_prefer_days.clear()
-    selected_units.clear()
-    selected_manual_days.clear()
-
     if "year" in data:
         year = data["year"]
         set_year(year)                          # ← add this line
@@ -349,6 +335,7 @@ def load_xlsx_preferences(widgets, state, callbacks):
         # data_only=False → keep formulas and formatting (needed to read cell colors)
         # data_only=True would only give us the VALUES, losing all color information
         wb = openpyxl.load_workbook(file_path, data_only=False)
+        theme_colors = extract_theme_colors(file_path)
 
         # Try to find a suitable sheet
         sheet = None
@@ -502,10 +489,18 @@ def load_xlsx_preferences(widgets, state, callbacks):
                 cell = sheet.cell(row=r, column=col)
 
                 if cell.fill and cell.fill.fill_type == 'solid':
-                    color = cell.fill.start_color.rgb
-                    if color is None:
+                    color = cell.fill.start_color
+                    color_hex = None
+
+                    if isinstance(color.rgb, str):
+                        color_hex = color.rgb.upper()[-6:]
+                    elif color.type == 'theme' and color.theme < len(theme_colors):
+                        raw = theme_colors[color.theme]
+                        if raw:
+                            color_hex = raw[-6:]
+
+                    if color_hex is None:
                         continue
-                    color_hex = color.upper()[-6:]
 
                     if is_red_color(color_hex):
                         cannot_list.append(f"{shift_type} {day}")
@@ -661,4 +656,32 @@ def is_green_color(color_hex):
         return g > r and g > b and g > 100
     except (ValueError, IndexError):
         return False
-        
+
+def extract_theme_colors(file_path):
+    """
+    Reads the theme color palette from the xlsx file's internal XML.
+    Returns a list of hex strings indexed by theme position.
+    e.g. theme index 5 might be 'EA4335' (Google Red)
+    """
+    import zipfile
+    import xml.etree.ElementTree as ET
+    theme_colors = []
+    try:
+        with zipfile.ZipFile(file_path, 'r') as z:
+            theme_files = [f for f in z.namelist() if 'theme' in f.lower() and f.endswith('.xml')]
+            if not theme_files:
+                return theme_colors
+            with z.open(theme_files[0]) as f:
+                tree = ET.parse(f)
+                root = tree.getroot()
+                ns = {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}
+                clrScheme = root.find('.//a:clrScheme', ns)
+                if clrScheme is None:
+                    return theme_colors
+                for child in clrScheme:
+                    for color_child in child:
+                        val = color_child.get('val') or color_child.get('lastClr')
+                        theme_colors.append(val.upper() if val else None)
+    except Exception:
+        pass
+    return theme_colors
